@@ -68,3 +68,37 @@ export async function countGpuFrames(page) {
 }
 
 export const shot = (page, name) => page.screenshot({ path: path.join(OUT, `${name}.png`), timeout: 30000 }).catch((e) => log('screenshot skipped', name, e.message.slice(0, 80)));
+
+/**
+ * The canvas's film set nodes from its overview (read when the canvas loads), and a way to bring one under the mouse: on the
+ * WebGPU canvas an idle card may be drawn by the GPU with no DOM element, so it is found by its position, not its text.
+ */
+export function watchOverview(page) {
+  const box = { nodes: [] };
+  page.on('response', async (r) => {
+    if (!/\/canvases\/[^/]+\/overview/.test(r.url())) return;
+    try { const d = await r.json(); const out = []; const walk = (o) => { if (Array.isArray(o)) o.forEach(walk); else if (o && typeof o === 'object') { if (o.type === 'cinemap-world' && o.data?.cinemap) out.push(o); Object.values(o).forEach(walk); } }; walk(d); box.nodes = out; } catch {}
+  });
+  return box;
+}
+
+/** Absolute flow position of a node (adds its parents' positions). */
+function flowPos(node, byId) { let x = node.position?.x ?? 0, y = node.position?.y ?? 0, p = node.parent_id || node.parentId; while (p && byId[p]) { x += byId[p].position?.x ?? 0; y += byId[p].position?.y ?? 0; p = byId[p].parent_id || byId[p].parentId; } return { x, y }; }
+
+/** Pans the canvas until the node's centre is in the middle of the pane; returns that screen point. */
+export async function centreNode(page, node, all) {
+  const byId = Object.fromEntries(all.map((n) => [n.id, n]));
+  const { x, y } = flowPos(node, byId);
+  const w = node.measured?.width ?? 888, h = node.measured?.height ?? 500;
+  for (let i = 0; i < 8; i++) {
+    const t = await page.evaluate(() => { const v = document.querySelector('.react-flow__viewport'); const m = v && getComputedStyle(v).transform; const pane = document.querySelector('.react-flow')?.getBoundingClientRect(); if (!m || !pane) return null; const a = new DOMMatrix(m); return { k: a.a, tx: a.e, ty: a.f, px: pane.left, py: pane.top, pw: pane.width, ph: pane.height }; });
+    if (!t) return null;
+    const sx = t.px + t.tx + (x + w / 2) * t.k, sy = t.py + t.ty + (y + h / 2) * t.k;
+    const cx = t.px + t.pw / 2, cy = t.py + t.ph / 2;
+    if (Math.abs(sx - cx) < 30 && Math.abs(sy - cy) < 30) return { x: sx, y: sy, zoom: t.k };
+    await page.mouse.move(cx, cy);
+    await page.mouse.wheel(Math.max(-1500, Math.min(1500, sx - cx)), Math.max(-1500, Math.min(1500, sy - cy)));
+    await sleep(700);
+  }
+  return null;
+}

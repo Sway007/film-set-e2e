@@ -1,12 +1,13 @@
 // Opens a finished Film set's popup on the TapNow canvas: time to the first picture, the light viewer, the canvas holding still,
 // the card videos pausing, the shot buttons, memory.
-import { FE, BFF, launch, signIn, dismiss, countGpuFrames, sleep, log, result, save, shot } from './lib.mjs';
+import { FE, BFF, launch, signIn, dismiss, countGpuFrames, sleep, log, result, save, shot, watchOverview, centreNode } from './lib.mjs';
 
 const CANVAS = process.env.CANVAS_ID; if (!CANVAS) throw new Error('CANVAS_ID input is required');
 const MATCH = new RegExp(process.env.SET_MATCH || 'airport', 'i');
 const { ctx, page } = await launch();
 try {
   await countGpuFrames(page);
+  const overview = watchOverview(page);
   await signIn(page);
   await page.goto(`https://${FE}/p/${CANVAS}?t=c&bff_env=${BFF}`, { waitUntil: 'domcontentloaded', timeout: 120000 });
   await sleep(25000); await dismiss(page);
@@ -14,15 +15,21 @@ try {
   result.gpu = gpu; log('gpu', JSON.stringify(gpu));
   const vids = () => page.evaluate(() => [...document.querySelectorAll('[data-testid="cinemap-world-turntable-video"]')].map((v) => ({ playing: !v.paused, w: v.videoWidth, h: v.videoHeight, seconds: Math.round(v.duration || 0) })));
   const frames = () => page.evaluate(() => window.__fsSubmits ?? null);
-  // Bring the set's card into view so its video plays.
-  await page.evaluate((src) => { const re = new RegExp(src, 'i'); for (const n of document.querySelectorAll('.react-flow__node')) if (re.test(n.textContent)) { n.scrollIntoView({ block: 'center' }); return; } }, MATCH.source);
-  await sleep(5000);
+  // Find the set in the canvas data (on the WebGPU canvas an idle card can have no DOM element), centre it, then open it.
+  const target = overview.nodes.find((n) => n.data.cinemap.status === 'ready' && MATCH.test(`${n.data.title || ''} ${n.data.cinemap.brief || ''}`));
+  if (!target) throw new Error(`no finished set matching ${MATCH} on the canvas (${overview.nodes.length} film set nodes)`);
+  const at = await centreNode(page, target, overview.nodes);
+  if (!at) throw new Error('could not bring the set to the middle of the canvas');
+  log('centred', JSON.stringify(at));
+  await page.mouse.move(at.x, at.y); await sleep(5000);
   result.cardsBefore = await vids();
-  const f0 = await frames(); await page.mouse.move(900, 500); await page.mouse.wheel(0, 200); await sleep(2000);
-  result.framesOnPanBeforeOpen = (await frames()) - f0;
+  const f0 = await frames(); await page.mouse.move(at.x + 40, at.y + 20, { steps: 10 }); await sleep(2000);
+  result.framesOnHoverBeforeOpen = (await frames()) - f0;
   const t0 = Date.now();
-  const clicked = await page.evaluate((src) => { const re = new RegExp(src, 'i'); for (const n of document.querySelectorAll('.react-flow__node')) { const b = n.querySelector('[data-testid="cinemap-world-enter"]'); if (b && re.test(n.textContent)) { b.click(); return n.textContent.slice(0, 40); } } return null; }, MATCH.source);
-  if (!clicked) throw new Error(`no finished set matching ${MATCH} on the canvas`);
+  // The hover button when the card has its DOM, else a double click on the card (opens the same view).
+  const viaButton = await page.evaluate(() => { const b = [...document.querySelectorAll('[data-testid="cinemap-world-enter"]')].find((e) => { const r = e.getBoundingClientRect(); return r.width && r.x > 0 && r.y > 0 && r.x < innerWidth && r.y < innerHeight; }); if (b) { b.click(); return true; } return false; });
+  if (!viaButton) await page.mouse.dblclick(at.x, at.y);
+  const clicked = `${target.data.title || target.data.cinemap.brief || target.id}`.slice(0, 40) + (viaButton ? ' (button)' : ' (double click)');
   result.set = clicked; log('opened', clicked);
   let ready = null, state = null;
   for (let i = 0; i < 120; i++) {
