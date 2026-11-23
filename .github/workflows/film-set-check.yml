@@ -18,7 +18,7 @@ on:
       canvas_id:
         description: TapNow canvas id
         required: false
-        default: 81438291-cfbc-4915-aea6-e773b8a53b26
+        default: ''
       set_match:
         description: popup test, text of the set to open
         required: false

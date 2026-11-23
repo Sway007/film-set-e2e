@@ -2,7 +2,7 @@
 // finished card's turntable video: 1280×720, about 30 s per turn, file size.
 import { FE, BFF, launch, signIn, dismiss, sleep, log, result, save, shot } from './lib.mjs';
 
-const CANVAS = process.env.CANVAS_ID || '81438291-cfbc-4915-aea6-e773b8a53b26';
+const CANVAS = process.env.CANVAS_ID; if (!CANVAS) throw new Error('CANVAS_ID input is required');
 const SENTENCE = process.env.SENTENCE || 'A quiet bus stop at dusk with one bench and a streetlight';
 const { ctx, page } = await launch();
 try {
