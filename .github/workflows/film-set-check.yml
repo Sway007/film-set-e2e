@@ -23,6 +23,10 @@ on:
         description: popup test, text of the set to open
         required: false
         default: airport
+      video_key:
+        description: demo test, one-time key to encrypt the highlight video for pickup (masked; the artifact is only ciphertext)
+        required: false
+        default: ''
       agent_env:
         description: agent test, Agent PR preview environment name (agent_env)
         required: false
@@ -45,7 +49,7 @@ jobs:
       # The repo is public: mask the preview share token and the canvas id before any step shows them. Read from the event
       # file, so the values never appear in a script line either.
       - name: Mask inputs
-        run: node -e "const i=require(process.env.GITHUB_EVENT_PATH).inputs||{};for(const k of ['vercel_share','canvas_id'])if(i[k])console.log('::add-mask::'+i[k])"
+        run: node -e "const i=require(process.env.GITHUB_EVENT_PATH).inputs||{};for(const k of ['vercel_share','canvas_id','video_key'])if(i[k])console.log('::add-mask::'+i[k])"
       - run: npm install --no-audit --no-fund
       - run: npx playwright install ${{ inputs.browser }}
       - name: Run
@@ -62,3 +66,21 @@ jobs:
           # (public repo: nothing of the canvas is uploaded); the log prints only the numbers (result.json).
           RUN_TAG: run-${{ github.run_number }}-${{ inputs.test }}-${{ inputs.browser }}
         run: node tests/${{ inputs.test }}.mjs
+      # demo only: the highlight video leaves this Mac encrypted (a one-time key passed as a masked input), kept one day
+      - name: Encrypt highlight video
+        if: ${{ always() && inputs.test == 'demo' && inputs.video_key != '' }}
+        env:
+          KEY: ${{ inputs.video_key }}
+          RUN_TAG: run-${{ github.run_number }}-${{ inputs.test }}-${{ inputs.browser }}
+        run: |
+          f="$HOME/.film-set-e2e/results/$RUN_TAG/film-set-highlights.webm"
+          test -s "$f" || { echo "no highlight video"; exit 0; }
+          mkdir -p "$RUNNER_TEMP/hl" && openssl enc -aes-256-cbc -pbkdf2 -salt -in "$f" -out "$RUNNER_TEMP/hl/highlights.bin" -pass env:KEY
+          ls -l "$RUNNER_TEMP/hl"
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && inputs.test == 'demo' && inputs.video_key != '' }}
+        with:
+          name: highlights-encrypted
+          path: ${{ runner.temp }}/hl/highlights.bin
+          retention-days: 1
+          if-no-files-found: ignore
