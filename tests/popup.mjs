@@ -53,7 +53,7 @@ try {
   const viewerInfo = async () => (viewerFrame ? viewerFrame.evaluate(() => ({ lite: !!window.__nodeLite, heapMB: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null, info: window.__workshop?.renderer?.info?.render ? { calls: window.__workshop.renderer.info.render.calls, triangles: window.__workshop.renderer.info.render.triangles } : null })).catch((e) => ({ error: e.message.slice(0, 80) })) : null);
   result.viewer = await viewerInfo();
 
-  const idleState = () => viewerFrame?.evaluate(() => { const I = window.__nodeIdle, R = window.__nodeRoam; return { idle: I ? { asleep: I.asleep, sleeps: I.sleeps, frames: I.frames } : null, roam: !!R, roamMoving: R ? !!R.moving : null, hasFocus: document.hasFocus() }; }).catch((e) => ({ error: e.message.slice(0, 80) }));
+  const idleState = () => viewerFrame?.evaluate(() => { const I = window.__nodeIdle, R = window.__nodeRoam; return { idle: I ? { asleep: I.asleep, sleeps: I.sleeps, frames: I.frames, why: I.why ?? null } : null, indoor: !!window.__interior?.inside, roam: !!R, roamMoving: R ? !!R.moving : null, hasFocus: document.hasFocus() }; }).catch((e) => ({ error: e.message.slice(0, 80) }));
   result.idleAtReady = await idleState();
   await mark(page, 'popup-idle'); const f1 = await frames(); await sleep(10000);
   result.idleAfter10s = await idleState();
