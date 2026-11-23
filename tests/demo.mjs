@@ -33,10 +33,11 @@ try {
 
   await caption('② 一个画布只能有一个片场：添加菜单里「片场」置灰并提示');
   try {
-    await page.mouse.click(where.x + 520, where.y + 330, { button: 'right' }); await sleep(1500);
-    const row = page.getByRole('menuitem').filter({ hasText: /Film set|片场/ }).first();
-    if (await row.isVisible({ timeout: 3000 }).catch(() => false)) { await row.hover(); await sleep(3500); }
-    else { const any = page.getByText(/^(Film set|片场)$/).first(); if (await any.isVisible({ timeout: 2000 }).catch(() => false)) { await any.hover(); await sleep(3500); } else log('menu row not found'); }
+    const plus = await page.evaluate(() => { const bar = [...document.querySelectorAll('*')].find((e) => /to type/.test(e.textContent || '') && e.children.length < 6 && e.getBoundingClientRect().width < 500); if (!bar) return null; const b = bar.closest('div')?.getBoundingClientRect() ?? bar.getBoundingClientRect(); const cy = b.y + b.height / 2; const bs = [...document.querySelectorAll('button')].map((x) => ({ r: x.getBoundingClientRect() })).filter(({ r }) => r.width > 0 && Math.abs(r.y + r.height / 2 - cy) < 30 && r.x > b.x + b.width - 5).sort((a, c) => a.r.x - c.r.x); return bs[0] ? { x: bs[0].r.x + bs[0].r.width / 2, y: bs[0].r.y + bs[0].r.height / 2 } : null; });
+    if (plus) { await page.mouse.click(plus.x, plus.y); await sleep(1500); }
+    const row = page.getByText(/^(Film set|片场)$/).first();
+    if (await row.isVisible({ timeout: 3000 }).catch(() => false)) { const rb = await row.boundingBox(); await page.mouse.move(rb.x + rb.width / 2, rb.y + rb.height / 2); await sleep(4000); result.menuRow = await row.evaluate((e) => { const it = e.closest('[role="menuitem"],button,[aria-disabled]'); return { disabled: it?.getAttribute('aria-disabled') ?? it?.hasAttribute?.('disabled') ?? null }; }).catch(() => null); }
+    else log('menu row not found', plus ? 'plus clicked' : 'no plus');
     await page.keyboard.press('Escape'); await sleep(1000);
   } catch (e) { log('menu step skipped', e.message.slice(0, 80)); }
 
@@ -58,14 +59,18 @@ try {
     await caption('⑧ 在画布里跟 agent 说一句话，直接改这个片场');
     const states = []; let last = '';
     page.on('response', async (r) => { if (!r.url().includes(sceneId) || r.request().method() !== 'GET') return; try { const d = await r.json(); const w = d?.data ?? d; const s = [w?.status, w?.progress?.stage ?? w?.stage].filter(Boolean).join('/'); if (s && s !== last) { last = s; states.push({ t: at(), s }); } } catch {} });
-    await page.mouse.click(where.x + 520, where.y + 330); await page.keyboard.press('/'); await sleep(1500);
+    let run = null; page.on('request', (r) => { const m = r.url().match(/agent-gateway-stream\/v1\/runs\/([0-9a-f-]{36})/); if (m && !run) run = m[1].slice(0, 8); });
+    await page.keyboard.press('Escape'); await sleep(500);
+    const typeBar = page.getByText(/to type/).first();
+    if (await typeBar.isVisible({ timeout: 2000 }).catch(() => false)) await typeBar.click(); else { await page.mouse.click(700, 450); await page.keyboard.press('/'); }
+    await sleep(1500);
     await page.keyboard.type(SAY, { delay: 45 }); await sleep(800); await page.keyboard.press('Enter');
     const sent = Date.now();
     for (let i = 0; i < 36; i++) { await sleep(5000); if (/^ready/.test(last) && states.length > 1) break; if (i > 6 && /^ready/.test(last) && Date.now() - sent > 40000) break; }
     await caption('⑨ 片场按 agent 的指令重建完成'); await sleep(6000);
-    result.agent = { states, final: last, seconds: Math.round((Date.now() - sent) / 1000) };
+    result.agent = { run, states, final: last, seconds: Math.round((Date.now() - sent) / 1000) };
     await caption('⑩ 再进入片场看改完的效果');
-    const where2 = await focusBySearch(page, String(target.data.title).slice(0, 30)) ?? where;
+    await page.keyboard.press('Escape'); await sleep(800); const where2 = where;
     result.popupReadySeconds2 = await openPopup(where2); await sleep(2000);
     const box2 = await page.locator('[data-testid="cinemap-world-detail-dialog"] iframe').first().boundingBox();
     if (box2) { const cx = box2.x + box2.width / 2, cy = box2.y + box2.height / 2; await page.mouse.move(cx, cy); await page.mouse.down(); for (let i = 0; i < 50; i++) { await page.mouse.move(cx - i * 6, cy); await sleep(50); } await page.mouse.up(); }
