@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       test:
-        description: popup | build | agent | vercel-login
+        description: popup | build | agent | demo | vercel-login
         required: true
         default: popup
       browser:
