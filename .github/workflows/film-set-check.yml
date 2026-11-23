@@ -38,6 +38,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      # The repo is public: mask the preview share token and the canvas id before any step shows them. Read from the event
+      # file, so the values never appear in a script line either.
+      - name: Mask inputs
+        run: node -e "const i=require(process.env.GITHUB_EVENT_PATH).inputs||{};for(const k of ['vercel_share','canvas_id'])if(i[k])console.log('::add-mask::'+i[k])"
       - run: npm install --no-audit --no-fund
       - run: npx playwright install ${{ inputs.browser }}
       - name: Run
@@ -49,11 +53,7 @@ jobs:
           SENTENCE: ${{ inputs.sentence }}
           T_USER: ${{ secrets.TAPNOW_USER }}
           T_PASS: ${{ secrets.TAPNOW_PASS }}
-          OUT_DIR: out
+          # Screenshots and the screen recording stay on this Mac, in ~/.film-set-e2e/results/run-<n>-<test>-<browser>
+          # (public repo: nothing of the canvas is uploaded); the log prints only the numbers (result.json).
+          RUN_TAG: run-${{ github.run_number }}-${{ inputs.test }}-${{ inputs.browser }}
         run: node tests/${{ inputs.test }}.mjs
-      - if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: film-set-${{ inputs.test }}-${{ inputs.browser }}-${{ github.run_number }}
-          path: out
-          retention-days: 7

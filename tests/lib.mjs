@@ -6,14 +6,17 @@ import path from 'node:path';
 
 export const FE = process.env.FE_HOST || 'tapnow-pr-2178.cinemap.space';
 export const BFF = process.env.BFF_ENV || 'pr-10837';
-export const OUT = path.resolve(process.env.OUT_DIR || 'out');
+export const OUT = path.resolve(process.env.OUT_DIR || path.join(os.homedir(), '.film-set-e2e', 'results', process.env.RUN_TAG || `local-${Date.now()}`));
 fs.mkdirSync(OUT, { recursive: true });
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const t0 = Date.now();
 const lines = [];
 export const log = (...a) => { const s = `[${((Date.now() - t0) / 1000).toFixed(1)}s] ${a.join(' ')}`; lines.push(s); console.log(s); };
 export const result = {};
-export function save() { fs.writeFileSync(path.join(OUT, 'result.json'), JSON.stringify(result, null, 2)); fs.writeFileSync(path.join(OUT, 'log.txt'), lines.join('\n')); }
+export function save() {
+  fs.writeFileSync(path.join(OUT, 'result.json'), JSON.stringify(result, null, 2)); fs.writeFileSync(path.join(OUT, 'log.txt'), lines.join('\n'));
+  console.log('RESULT_JSON ' + JSON.stringify(result)); console.log('Screenshots and recording on this Mac: ' + OUT);
+}
 
 /** Opens the browser: Chrome with the Mac's GPU (or WebKit, Safari's engine), headed so the GPU is really used. */
 export async function launch(browserName = process.env.BROWSER || 'chromium') {
@@ -32,13 +35,17 @@ export async function launch(browserName = process.env.BROWSER || 'chromium') {
 export async function signIn(page) {
   const share = process.env.VERCEL_SHARE;
   await page.goto(`https://${FE}/${share ? `?_vercel_share=${share}&` : '?'}bff_env=${BFF}`, { waitUntil: 'domcontentloaded', timeout: 120000 });
-  await sleep(8000);
-  if (!/auth-login|login/.test(page.url()) && !(await page.locator('text=Try Free').count())) { log('already signed in'); return; }
+  // The share link and the app both redirect: wait until the page settles before looking at it.
+  await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+  await sleep(5000);
+  const needsLogin = async () => { try { return /auth-login|\/login/.test(page.url()) || (await page.locator('text=Try Free').count()) > 0; } catch { await sleep(2000); return /auth-login|\/login/.test(page.url()); } };
+  if (!(await needsLogin())) { log('already signed in'); return; }
   if (!process.env.T_USER || !process.env.T_PASS) throw new Error('Not signed in and no TAPNOW_USER / TAPNOW_PASS secrets');
   await page.keyboard.press('Escape');
-  if (await page.locator('text=Try Free').count()) { await page.locator('text=Try Free').last().click(); await sleep(4000); }
-  const got = page.getByRole('button', { name: /^Got it$/ }); if (await got.count()) await got.first().click({ force: true, timeout: 5000 }).catch(() => {});
-  await page.getByPlaceholder(/Email address/i).fill(process.env.T_USER);
+  const tryFree = page.locator('text=Try Free');
+  if (await tryFree.count().catch(() => 0)) { await tryFree.last().click(); await sleep(4000); }
+  const got = page.getByRole('button', { name: /^Got it$/ }); if (await got.count().catch(() => 0)) await got.first().click({ force: true, timeout: 5000 }).catch(() => {});
+  await page.getByPlaceholder(/Email address/i).fill(process.env.T_USER, { timeout: 60000 });
   await page.getByRole('button', { name: /^Continue$/ }).click();
   await page.locator('input[type=password]').first().waitFor({ timeout: 60000 });
   await page.locator('input[type=password]').first().fill(process.env.T_PASS);
