@@ -1,59 +1,72 @@
-// Opens a finished Film set's popup on the TapNow canvas: time to the first picture, the light viewer, the canvas holding still,
-// the card videos pausing, the shot buttons, memory.
+// Opens a finished Film set's popup on the TapNow canvas and records a Chrome performance trace (as the DevTools Performance
+// panel) through these phases: canvas idle → opening until the 3D view is ready → popup idle → orbit drag → WASD → after close.
+// Also: the light viewer, canvas frames and card videos while the popup is open, hover highlight, shot button, memory.
 import { FE, BFF, launch, signIn, dismiss, countGpuFrames, sleep, log, result, save, shot, watchOverview, centreNode } from './lib.mjs';
+import { startTrace, stopTrace, mark } from './perf.mjs';
 
 const CANVAS = process.env.CANVAS_ID; if (!CANVAS) throw new Error('CANVAS_ID input is required');
 const MATCH = new RegExp(process.env.SET_MATCH || 'airport', 'i');
 const { ctx, page } = await launch();
+let cdp = null;
 try {
   await countGpuFrames(page);
   const overview = watchOverview(page);
   await signIn(page);
   await page.goto(`https://${FE}/p/${CANVAS}?t=c&bff_env=${BFF}`, { waitUntil: 'domcontentloaded', timeout: 120000 });
   await sleep(25000); await dismiss(page);
-  const gpu = await page.evaluate(() => ({ webgpu: !!navigator.gpu, surface: !!document.querySelector('[data-webgpu-surface]'), deviceMemory: navigator.deviceMemory ?? null }));
-  result.gpu = gpu; log('gpu', JSON.stringify(gpu));
+  result.gpu = await page.evaluate(() => ({ webgpu: !!navigator.gpu, surface: !!document.querySelector('[data-webgpu-surface]'), deviceMemory: navigator.deviceMemory ?? null }));
+  log('gpu', JSON.stringify(result.gpu));
   const vids = () => page.evaluate(() => [...document.querySelectorAll('[data-testid="cinemap-world-turntable-video"]')].map((v) => ({ playing: !v.paused, w: v.videoWidth, h: v.videoHeight, seconds: Math.round(v.duration || 0) })));
   const frames = () => page.evaluate(() => window.__fsSubmits ?? null);
-  // Find the set in the canvas data (on the WebGPU canvas an idle card can have no DOM element), centre it, then open it.
   const target = overview.nodes.find((n) => n.data.cinemap.status === 'ready' && MATCH.test(`${n.data.title || ''} ${n.data.cinemap.brief || ''}`));
   if (!target) throw new Error(`no finished set matching ${MATCH} on the canvas (${overview.nodes.length} film set nodes)`);
+  result.set = target.data.title || target.data.cinemap.brief; result.stats = target.data.cinemap.stats ?? null;
   const at = await centreNode(page, target, overview.nodes);
   if (!at) throw new Error('could not bring the set to the middle of the canvas');
-  log('centred', JSON.stringify(at));
   await page.mouse.move(at.x, at.y); await sleep(5000);
   result.cardsBefore = await vids();
-  const f0 = await frames(); await page.mouse.move(at.x + 40, at.y + 20, { steps: 10 }); await sleep(2000);
-  result.framesOnHoverBeforeOpen = (await frames()) - f0;
-  const t0 = Date.now();
-  // The hover button when the card has its DOM, else a double click on the card (opens the same view).
+
+  cdp = await startTrace(ctx, page);
+  await mark(page, 'canvas-idle'); const f0 = await frames(); await sleep(5000); result.canvasFramesIdle5s = (await frames()) - f0;
+
+  await mark(page, 'open-until-ready'); const t0 = Date.now();
   const viaButton = await page.evaluate(() => { const b = [...document.querySelectorAll('[data-testid="cinemap-world-enter"]')].find((e) => { const r = e.getBoundingClientRect(); return r.width && r.x > 0 && r.y > 0 && r.x < innerWidth && r.y < innerHeight; }); if (b) { b.click(); return true; } return false; });
   if (!viaButton) await page.mouse.dblclick(at.x, at.y);
-  const clicked = `${target.data.title || target.data.cinemap.brief || target.id}`.slice(0, 40) + (viaButton ? ' (button)' : ' (double click)');
-  result.set = clicked; log('opened', clicked);
-  let ready = null, state = null;
-  for (let i = 0; i < 120; i++) {
+  let state = null;
+  for (let i = 0; i < 180; i++) {
     state = await page.evaluate(() => { const d = document.querySelector('[data-testid="cinemap-world-detail-dialog"]'); const c = d?.querySelector('[data-testid="cinemap-world-frame-cover"]'); return { dialog: !!d, iframe: !!d?.querySelector('iframe'), inTab: !!d?.querySelector('[data-testid="cinemap-world-open-in-tab"]'), coverShown: c?.hasAttribute('data-shown') ?? null, failed: !!d?.querySelector('[data-testid="cinemap-world-preview-failed"]') }; });
-    if (state.iframe && state.coverShown === false) { ready = (Date.now() - t0) / 1000; break; }
+    if (state.iframe && state.coverShown === false) break;
     if (state.failed || state.inTab) break;
     await sleep(500);
   }
-  result.popup = { ...state, readySeconds: ready }; log('popup', JSON.stringify(result.popup));
-  await sleep(3000); await shot(page, '1-popup');
-  for (const f of page.frames()) { try { const r = await f.evaluate(() => (window.__workshop ? { lite: !!window.__nodeLite, heapMB: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null } : null)); if (r) result.viewer = r; } catch {} }
-  result.topHeapMB = await page.evaluate(() => (performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null));
-  // The canvas behind the popup: frames while open (expect 0), videos paused.
-  const f1 = await frames(); await page.setViewportSize({ width: 1500, height: 950 }); await sleep(4000);
-  result.framesWhileOpen = (await frames()) - f1; result.cardsWhileOpen = await vids();
-  // Turn the camera in the viewer (drag + wheel), then try the first shot button.
-  const stage = page.locator('[data-testid="cinemap-world-stage"]');
-  const bb = await stage.boundingBox();
-  if (bb) { await page.mouse.move(bb.x + bb.width / 2, bb.y + bb.height / 2); await page.mouse.down(); await page.mouse.move(bb.x + bb.width / 2 + 250, bb.y + bb.height / 2 + 40, { steps: 20 }); await page.mouse.up(); await page.mouse.wheel(0, -300); await sleep(2000); await shot(page, '2-turned'); }
+  result.popup = { ...state, readySeconds: state.iframe && state.coverShown === false ? (Date.now() - t0) / 1000 : null, opened: viaButton ? 'button' : 'double click' };
+  log('popup', JSON.stringify(result.popup));
+  await shot(page, '1-popup');
+  const viewerFrame = page.frames().find((f) => /editor\.html/.test(f.url()));
+  const viewerInfo = async () => (viewerFrame ? viewerFrame.evaluate(() => ({ lite: !!window.__nodeLite, heapMB: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null, info: window.__workshop?.renderer?.info?.render ? { calls: window.__workshop.renderer.info.render.calls, triangles: window.__workshop.renderer.info.render.triangles } : null })).catch((e) => ({ error: e.message.slice(0, 80) })) : null);
+  result.viewer = await viewerInfo();
+
+  await mark(page, 'popup-idle'); const f1 = await frames(); await sleep(10000);
+  result.canvasFramesWhilePopupIdle10s = (await frames()) - f1; result.cardsWhileOpen = await vids();
+  const stage = await page.locator('[data-testid="cinemap-world-stage"]').boundingBox();
+  if (stage) {
+    const cx = stage.x + stage.width / 2, cy = stage.y + stage.height / 2;
+    await mark(page, 'popup-hover'); for (let i = 0; i < 40; i++) { await page.mouse.move(cx - 300 + i * 15, cy - 100 + (i % 5) * 40); await sleep(100); } await shot(page, '2-hover');
+    await mark(page, 'popup-orbit'); await page.mouse.move(cx, cy); await page.mouse.down(); await page.mouse.move(cx + 400, cy + 60, { steps: 60 }); await page.mouse.up(); await page.mouse.wheel(0, -400); await sleep(1500); await shot(page, '3-orbit');
+    await mark(page, 'popup-wasd'); await page.mouse.click(cx, cy); const before = await viewerFrame?.evaluate(() => window.__workshop?.camera?.position?.toArray?.() ?? null).catch(() => null);
+    await page.keyboard.down('w'); await sleep(1500); await page.keyboard.up('w'); await page.keyboard.down('d'); await sleep(1000); await page.keyboard.up('d');
+    const after = await viewerFrame?.evaluate(() => window.__workshop?.camera?.position?.toArray?.() ?? null).catch(() => null);
+    result.wasd = { before, after, moved: !!(before && after && before.some((v, i) => Math.abs(v - after[i]) > 0.01)) }; await shot(page, '4-wasd');
+  }
   const shotBtn = page.locator('[data-testid="cinemap-world-shots"] button').first();
-  if (await shotBtn.count()) { await shotBtn.click(); await sleep(4000); await shot(page, '3-shot'); result.shotButton = 'clicked'; } else result.shotButton = 'none';
-  await page.keyboard.press('Escape'); await sleep(3000);
-  const f2 = await frames(); await page.setViewportSize({ width: 1600, height: 1000 }); await sleep(3000);
-  result.framesAfterClose = (await frames()) - f2; result.cardsAfterClose = await vids();
-  await shot(page, '4-closed');
+  if (await shotBtn.count()) { await shotBtn.click(); await sleep(3000); await shot(page, '5-shot'); result.shotButton = 'clicked'; } else result.shotButton = 'none';
+  result.viewerEnd = await viewerInfo();
+  result.topHeapMB = await page.evaluate(() => (performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null));
+
+  await mark(page, 'after-close'); await page.keyboard.press('Escape'); await sleep(1000);
+  if (await page.locator('[data-testid="cinemap-world-detail-dialog"]').count()) { result.escapeClosedFromViewer = false; await page.mouse.click(10, 10); await page.keyboard.press('Escape'); await sleep(1000); } else result.escapeClosedFromViewer = true;
+  const f2 = await frames(); await sleep(5000); result.canvasFramesAfterClose5s = (await frames()) - f2; result.cardsAfterClose = await vids();
+  await mark(page, 'end');
+  result.trace = await stopTrace(cdp, 'trace-popup'); cdp = null;
 } catch (e) { result.error = String(e?.message || e); log('ERROR', result.error); await shot(page, 'error'); }
-finally { save(); await ctx.close(); }
+finally { if (cdp) await stopTrace(cdp, 'trace-popup').then((t) => { result.trace = t; }).catch(() => {}); save(); await ctx.close(); }
