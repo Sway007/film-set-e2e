@@ -1,0 +1,10 @@
+name: Runner hello
+
+on:
+  workflow_dispatch:
+
+jobs:
+  hello:
+    runs-on: [self-hosted, macOS, sway-gpu]
+    steps:
+      - run: echo "runner ok on $(uname -sm), node $(node -v 2>/dev/null || echo none)"
