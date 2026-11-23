@@ -4,7 +4,7 @@
 import { FE, BFF, launch, signIn, dismiss, countGpuFrames, sleep, log, result, save, shot, watchOverview, focusBySearch } from './lib.mjs';
 import { startTrace, stopTrace } from './perf.mjs';
 import { installCounters, openSessions, createRecorder } from './metrics.mjs';
-import { startProfile, stopProfile, netCollector, installFrameStats, readFrameStats, backgroundWork } from './profile.mjs';
+import { startProfile, stopProfile, netCollector, installFrameStats, readFrameStats, backgroundWork, siteCounting } from './profile.mjs';
 const FULL_TRACE = process.env.FULL_TRACE === '1';
 
 const CANVAS = process.env.CANVAS_ID; if (!CANVAS) throw new Error('CANVAS_ID input is required');
@@ -72,10 +72,12 @@ try {
   if (viewerFrame) {
     const iframeFrame = page.frames().find((f) => /\/p\/[^?]+\?embed=node/.test(f.url()));
     const bg0 = { viewer: await backgroundWork(viewerFrame), iframe: iframeFrame ? await backgroundWork(iframeFrame) : null };
+    for (const f of [viewerFrame, iframeFrame]) if (f) await siteCounting(f, true);
     await mark(page, 'popup-asleep');
     const p = await profileFor(5000);
+    for (const f of [viewerFrame, iframeFrame]) if (f) await siteCounting(f, false);
     const bg1 = { viewer: await backgroundWork(viewerFrame), iframe: iframeFrame ? await backgroundWork(iframeFrame) : null };
-    const per5 = (k) => (bg1[k] && bg0[k]?.timers ? { animations: bg1[k].animations, animationNames: bg1[k].animationNames, timeouts5s: bg1[k].timers.timeout - bg0[k].timers.timeout, intervals5s: bg1[k].timers.interval - bg0[k].timers.interval, rafFrames5s: bg1[k].timers.rafFrames - bg0[k].timers.rafFrames } : bg1[k]);
+    const per5 = (k) => (bg1[k] && bg0[k]?.timers ? { sites: bg1[k].sites, animations: bg1[k].animations, animationNames: bg1[k].animationNames, timeouts5s: bg1[k].timers.timeout - bg0[k].timers.timeout, intervals5s: bg1[k].timers.interval - bg0[k].timers.interval, rafFrames5s: bg1[k].timers.rafFrames - bg0[k].timers.rafFrames } : bg1[k]);
     result.asleep = { state: await idleState(), profile: p, viewer: per5('viewer'), iframe: per5('iframe') };
   }
   if (viewerFrame) await installFrameStats(viewerFrame);

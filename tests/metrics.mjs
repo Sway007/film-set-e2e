@@ -11,11 +11,20 @@ export async function installCounters(page) {
     const c = (window.__fsC = { raf: 0, rafFrames: 0, to: 0, iv: 0, longN: 0, longMs: 0 });
     try { performance.setResourceTimingBufferSize(20000); } catch {} // the default 250 cut the open's count off at 250
     // raf: rAF callbacks (several loops each count); rafFrames: frames in which any rAF callback ran (the real frame rate).
+    // Who fires (only while window.__fsSiteOn, set around one measuring window): callbacks named by their function name, a few
+    // property names and short strings from their source (enough to find them in the repo, no full code in the public log).
+    c.sites = {}; const names = new WeakMap(), fts = Function.prototype.toString;
+    const describe = (fn) => { let d = names.get(fn); if (d) return d; let src = ''; try { src = fts.call(fn).slice(0, 3000); } catch {}
+      const props = [...new Set((src.match(/\.[A-Za-z_$][\w$]{3,}/g) || []).map((x) => x.slice(1)))].slice(0, 6).join(',');
+      const strs = (src.match(/'[^'\n]{3,32}'|"[^"\n]{3,32}"/g) || []).filter((x) => !/[?=&]|\/\//.test(x)).slice(0, 2).join(' ');
+      d = `${fn.name || 'anon'}{${props}}${strs ? ' ' + strs : ''}`; names.set(fn, d); return d; };
+    const site = (kind, fn, ms) => { if (!window.__fsSiteOn) return; const k = `${kind}${ms != null ? ' ' + ms + 'ms' : ''} ${describe(fn)}`; c.sites[k] = (c.sites[k] || 0) + 1; };
     const raf = window.requestAnimationFrame.bind(window); let lastT = -1;
-    window.requestAnimationFrame = (cb) => raf((t) => { c.raf++; if (t !== lastT) { lastT = t; c.rafFrames++; } cb(t); });
+    window.requestAnimationFrame = (cb) => raf((t) => { c.raf++; if (t !== lastT) { lastT = t; c.rafFrames++; } site('raf', cb); cb(t); });
     const st = window.setTimeout.bind(window), si = window.setInterval.bind(window);
-    window.setTimeout = (fn, ...a) => st(typeof fn === 'function' ? (...x) => { c.to++; return fn(...x); } : fn, ...a);
-    window.setInterval = (fn, ...a) => si(typeof fn === 'function' ? (...x) => { c.iv++; return fn(...x); } : fn, ...a);
+    window.setTimeout = (fn, ms, ...a) => st(typeof fn === 'function' ? (...x) => { c.to++; site('timeout', fn, ms | 0); return fn(...x); } : fn, ms, ...a);
+    window.setInterval = (fn, ms, ...a) => si(typeof fn === 'function' ? (...x) => { c.iv++; site('interval', fn, ms | 0); return fn(...x); } : fn, ms, ...a);
+    try { const ric = window.requestIdleCallback?.bind(window); if (ric) window.requestIdleCallback = (fn, o) => ric((d) => { site('idle', fn); return fn(d); }, o); } catch {}
     try { new PerformanceObserver((l) => { for (const e of l.getEntries()) { c.longN++; c.longMs += e.duration; } }).observe({ type: 'longtask', buffered: true }); } catch {}
   });
 }

@@ -73,7 +73,7 @@ export function netCollector(ctx, page) {
     reqs.push(item);
     try { const t = r.timing(); if (t.responseEnd > 0) item.ms = Math.round(t.responseEnd); } catch {}
     try { const resp = await r.response(); if (resp) { item.cached = resp.fromServiceWorker() || (resp.headers()['x-from-cache'] === '1'); } } catch {}
-    try { const s = await r.sizes(); item.bytes = s.responseBodySize || 0; } catch {}
+    try { const s = await r.sizes(); item.bytes = Math.max(0, s.responseBodySize || 0); } catch {}
   };
   ctx.on('requestfinished', (r) => onDone(r, false)); ctx.on('requestfailed', (r) => onDone(r, true));
   return {
@@ -127,12 +127,16 @@ export async function readFrameStats(frame) {
   }).catch((e) => ({ error: e.message.slice(0, 80) }));
 }
 
+/** Turns the per-callback counting on / off in a document (metrics.mjs). */
+export const siteCounting = (frame, on) => frame.evaluate((v) => { window.__fsSiteOn = v; if (window.__fsC) window.__fsC.sites = {}; }, on).catch(() => {});
+
 /** What runs in a document besides rendering: running CSS / Web animations, and timer / rAF callbacks per second (counters in metrics.mjs). */
 export async function backgroundWork(frame) {
   return frame.evaluate(() => {
     const a = document.getAnimations?.().filter((x) => x.playState === 'running') ?? [];
     const names = {}; for (const x of a) { const t = x.effect?.target; const k = `${x.animationName || x.constructor.name}@${t?.id ? '#' + t.id : t?.className ? '.' + String(t.className).split(' ')[0] : t?.tagName || '?'}`; names[k] = (names[k] || 0) + 1; }
     const c = window.__fsC || {};
-    return { animations: a.length, animationNames: Object.entries(names).slice(0, 6).map(([k, n]) => `${n}x ${k}`), timers: { timeout: c.to || 0, interval: c.iv || 0, rafFrames: c.rafFrames || 0 } };
+    const sites = Object.entries(c.sites || {}).sort((x, y) => y[1] - x[1]).slice(0, 10).map(([k, n]) => `${n}x ${k}`); c.sites = {};
+    return { sites, animations: a.length, animationNames: Object.entries(names).slice(0, 6).map(([k, n]) => `${n}x ${k}`), timers: { timeout: c.to || 0, interval: c.iv || 0, rafFrames: c.rafFrames || 0 } };
   }).catch((e) => ({ error: e.message.slice(0, 80) }));
 }
