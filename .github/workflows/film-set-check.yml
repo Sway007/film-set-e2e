@@ -28,10 +28,10 @@ on:
         required: false
         default: A quiet bus stop at dusk with one bench and a streetlight
 
-# Only this Mac's runner (label sway-gpu) takes these jobs; nothing else runs here.
+# Only the Mac runner registered to this repo (self-hosted, macOS, ARM64) takes these jobs.
 jobs:
   check:
-    runs-on: [self-hosted, macOS, sway-gpu]
+    runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
