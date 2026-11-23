@@ -53,7 +53,7 @@ function summarise(ev) {
   }
   const label = (pid) => { const u = procUrl[pid] || ''; if (/cinemap/.test(new URL(u || 'http://x').host) && !/tapnow-/.test(u)) return 'cinemap-iframe'; if (/tapnow/.test(u)) return 'tapnow-page'; return procName[pid] || `pid${pid}`; };
   const phases = ev.filter((e) => e.ph === 'R' || (e.cat?.includes('user_timing') && e.name?.startsWith('phase:'))).filter((e) => e.name?.startsWith('phase:')).map((e) => ({ name: e.name.slice(6), ts: e.ts })).sort((a, b) => a.ts - b.ts);
-  const endTs = Math.max(...ev.filter((e) => e.ts).map((e) => e.ts + (e.dur || 0)));
+  let endTs = 0; for (const e of ev) if (e.ts) { const t = e.ts + (e.dur || 0); if (t > endTs) endTs = t; }
   const windows = phases.map((p, i) => ({ name: p.name, from: p.ts, to: phases[i + 1]?.ts ?? endTs }));
   const res = {};
   for (const w of windows) {
