@@ -2,14 +2,16 @@
 // panel) through these phases: canvas idle → opening until the 3D view is ready → popup idle → orbit drag → WASD → after close.
 // Also: the light viewer, canvas frames and card videos while the popup is open, hover highlight, shot button, memory.
 import { FE, BFF, launch, signIn, dismiss, countGpuFrames, sleep, log, result, save, shot, watchOverview, focusBySearch } from './lib.mjs';
-import { startTrace, stopTrace, mark } from './perf.mjs';
+import { startTrace, stopTrace } from './perf.mjs';
+import { installCounters, openSessions, createRecorder } from './metrics.mjs';
+const FULL_TRACE = process.env.FULL_TRACE === '1';
 
 const CANVAS = process.env.CANVAS_ID; if (!CANVAS) throw new Error('CANVAS_ID input is required');
 const MATCH = new RegExp(process.env.SET_MATCH || 'airport', 'i');
 const { ctx, page } = await launch();
 let cdp = null;
 try {
-  await countGpuFrames(page);
+  await countGpuFrames(page); await installCounters(page);
   const overview = watchOverview(page);
   await signIn(page);
   await page.goto(`https://${FE}/p/${CANVAS}?t=c&bff_env=${BFF}`, { waitUntil: 'domcontentloaded', timeout: 120000 });
@@ -27,7 +29,9 @@ try {
   await page.mouse.move(at.x, at.y); await sleep(5000);
   result.cardsBefore = await vids();
 
-  cdp = await startTrace(ctx, page);
+  if (FULL_TRACE) cdp = await startTrace(ctx, page);
+  const rec = createRecorder(page); rec.attach(await openSessions(ctx, page));
+  const mark = (_p, name) => rec.mark(name);
   await mark(page, 'canvas-idle'); const f0 = await frames(); await sleep(5000); result.canvasFramesIdle5s = (await frames()) - f0;
 
   await mark(page, 'open-until-ready'); const t0 = Date.now();
@@ -44,6 +48,7 @@ try {
   result.popup = { ...state, readySeconds: state.iframe && state.coverShown === false ? (Date.now() - t0) / 1000 : null, opened: viaButton ? 'button' : 'double click' };
   log('popup', JSON.stringify(result.popup));
   await shot(page, '1-popup');
+  rec.attach(await openSessions(ctx, page));
   const viewerFrame = page.frames().find((f) => /editor\.html/.test(f.url()));
   const viewerInfo = async () => (viewerFrame ? viewerFrame.evaluate(() => ({ lite: !!window.__nodeLite, heapMB: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null, info: window.__workshop?.renderer?.info?.render ? { calls: window.__workshop.renderer.info.render.calls, triangles: window.__workshop.renderer.info.render.triangles } : null })).catch((e) => ({ error: e.message.slice(0, 80) })) : null);
   result.viewer = await viewerInfo();
@@ -69,6 +74,7 @@ try {
   if (await page.locator('[data-testid="cinemap-world-detail-dialog"]').count()) { result.escapeClosedFromViewer = false; await page.mouse.click(10, 10); await page.keyboard.press('Escape'); await sleep(1000); } else result.escapeClosedFromViewer = true;
   const f2 = await frames(); await sleep(5000); result.canvasFramesAfterClose5s = (await frames()) - f2; result.cardsAfterClose = await vids();
   await mark(page, 'end');
-  result.trace = await stopTrace(cdp, 'trace-popup'); cdp = null;
+  result.phases = rec.report();
+  if (cdp) { result.trace = await stopTrace(cdp, 'trace-popup'); cdp = null; }
 } catch (e) { result.error = String(e?.message || e); log('ERROR', result.error); await shot(page, 'error'); }
 finally { if (cdp) await stopTrace(cdp, 'trace-popup').then((t) => { result.trace = t; }).catch(() => {}); save(); await ctx.close(); }
