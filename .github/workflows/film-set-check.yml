@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       test:
-        description: popup | build | vercel-login
+        description: popup | build | agent | vercel-login
         required: true
         default: popup
       browser:
@@ -23,8 +23,12 @@ on:
         description: popup test, text of the set to open
         required: false
         default: airport
+      agent_env:
+        description: agent test, Agent PR preview environment name (agent_env)
+        required: false
+        default: ''
       sentence:
-        description: build test, the sentence for the new set
+        description: build test, the sentence for the new set; agent test, what to say to the agent
         required: false
         default: A quiet bus stop at dusk with one bench and a streetlight
 
@@ -51,6 +55,7 @@ jobs:
           CANVAS_ID: ${{ inputs.canvas_id }}
           SET_MATCH: ${{ inputs.set_match }}
           SENTENCE: ${{ inputs.sentence }}
+          AGENT_ENV: ${{ inputs.agent_env }}
           T_USER: ${{ secrets.TAPNOW_USER }}
           T_PASS: ${{ secrets.TAPNOW_PASS }}
           # Screenshots and the screen recording stay on this Mac, in ~/.film-set-e2e/results/run-<n>-<test>-<browser>
