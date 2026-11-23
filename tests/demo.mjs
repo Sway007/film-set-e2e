@@ -66,8 +66,8 @@ try {
     await sleep(1500);
     await page.keyboard.type(SAY, { delay: 45 }); await sleep(800); await page.keyboard.press('Enter');
     const sent = Date.now();
-    for (let i = 0; i < 36; i++) { await sleep(5000); if (/^ready/.test(last) && states.length > 1) break; if (i > 6 && /^ready/.test(last) && Date.now() - sent > 40000) break; }
-    await caption('⑨ 片场按 agent 的指令重建完成'); await sleep(6000);
+    for (let i = 0; i < 48; i++) { await sleep(5000); if (/^(ready|failed)/.test(last) && states.length > 1) break; }
+    if (/^ready/.test(last) && states.some((x) => !/^ready/.test(x.s))) { await caption('⑨ 片场按 agent 的指令重建完成'); await sleep(6000); } else { result.agentNotDone = true; log('agent edit did not finish', last); }
     result.agent = { run, states, final: last, seconds: Math.round((Date.now() - sent) / 1000) };
     await caption('⑩ 再进入片场看改完的效果');
     await page.keyboard.press('Escape'); await sleep(800); const where2 = where;
