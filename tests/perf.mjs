@@ -1,14 +1,15 @@
 // Chrome performance trace (the same data as the DevTools Performance panel), summarised per phase: main-thread busy time of
 // the TapNow page and of the CineMap iframe (separate processes), GPU process time, frames drawn, top scripts by time.
 import fs from 'node:fs';
+import readline from 'node:readline';
 import path from 'node:path';
 import { OUT, log } from './lib.mjs';
 
-const CATS = ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'disabled-by-default-devtools.timeline.frame', 'toplevel', 'v8.execute', 'blink.user_timing', 'gpu', 'viz', 'disabled-by-default-v8.cpu_profiler'].join(',');
+const CATS = ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'disabled-by-default-devtools.timeline.frame', 'toplevel', 'v8.execute', 'blink.user_timing', 'gpu', 'viz'].join(',');
 
 export async function startTrace(ctx, page) {
   const cdp = await ctx.newCDPSession(page);
-  await cdp.send('Tracing.start', { categories: CATS, transferMode: 'ReturnAsStream', options: 'sampling-frequency=1000' });
+  await cdp.send('Tracing.start', { categories: CATS, transferMode: 'ReturnAsStream' });
   return cdp;
 }
 
@@ -24,11 +25,25 @@ export async function stopTrace(cdp, name) {
   for (;;) { const { data, eof, base64Encoded } = await cdp.send('IO.read', { handle: stream, size: 4 << 20 }); out.write(base64Encoded ? Buffer.from(data, 'base64') : data); if (eof) break; }
   await new Promise((r) => out.end(r)); await cdp.send('IO.close', { handle: stream });
   log('trace saved (open it in Chrome DevTools > Performance > Load profile):', file);
-  return summarise(JSON.parse(fs.readFileSync(file, 'utf8')));
+  return summarise(await readEvents(file));
 }
 
-function summarise(trace) {
-  const ev = trace.traceEvents || trace;
+/** Streams the trace (it can be over 512 MB, too big for one string): one event per line in Chrome's trace output. */
+async function readEvents(file) {
+  const keep = new Set(['process_name', 'thread_name', 'TracingStartedInBrowser', 'TracingStartedInPage', 'CommitLoad', 'FrameCommittedInBrowser', 'RunTask', 'ThreadControllerImpl::RunTask', 'DrawFrame', 'FunctionCall', 'ResourceSendRequest', 'ResourceFinish', 'ParseHTML', 'EvaluateScript', 'v8.compile', 'GCEvent', 'MajorGC', 'MinorGC', 'V8.GC_MARK_COMPACTOR']);
+  const out = []; let n = 0;
+  const rl = readline.createInterface({ input: fs.createReadStream(file, { encoding: 'utf8', highWaterMark: 1 << 20 }), crlfDelay: Infinity });
+  const take = (txt) => { let t = txt.trim(); if (!t.startsWith('{')) return; if (t.endsWith(',')) t = t.slice(0, -1); if (t.endsWith(']}')) t = t.slice(0, -2); try { const e = JSON.parse(t); n++; if (keep.has(e.name) || e.name?.startsWith('phase:') || e.ph === 'M') out.push(e); } catch {} };
+  for await (const line of rl) {
+    // Some Chrome versions write all events on one line: split it on event boundaries.
+    if (line.length > 1e6) { for (const part of line.split(/},\s*{"/)) take((part.startsWith('{') ? '' : '{"') + part + (part.endsWith('}') ? '' : '}')); }
+    else take(line.replace(/^\{"traceEvents":\[/, ''));
+  }
+  log('trace events read', n, 'kept', out.length);
+  return out;
+}
+
+function summarise(ev) {
   const procName = {}, threadName = {}, procUrl = {};
   for (const e of ev) {
     if (e.ph === 'M' && e.name === 'process_name') procName[e.pid] = e.args?.name;
@@ -42,7 +57,7 @@ function summarise(trace) {
   const windows = phases.map((p, i) => ({ name: p.name, from: p.ts, to: phases[i + 1]?.ts ?? endTs }));
   const res = {};
   for (const w of windows) {
-    const secs = (w.to - w.from) / 1e6, by = {}, frames = {}, scripts = {}; let longTasks = 0;
+    const secs = (w.to - w.from) / 1e6, by = {}, frames = {}, scripts = {}, net = {}, gc = {}, evalJs = {}; let longTasks = 0;
     for (const e of ev) {
       if (!e.ts || e.ts < w.from || e.ts >= w.to) continue;
       const tn = threadName[`${e.pid}:${e.tid}`] || '';
@@ -52,10 +67,13 @@ function summarise(trace) {
         if (e.dur > 50_000 && /CrRendererMain/.test(tn)) longTasks++;
       }
       if (e.name === 'DrawFrame' || e.name === 'Graphics.Pipeline' && e.args?.step === 'SubmitCompositorFrame') frames[who] = (frames[who] || 0) + 1;
+      if (e.name === 'ResourceFinish') { const b = e.args?.data?.encodedDataLength || 0; net[who] = net[who] || { requests: 0, MB: 0 }; net[who].requests++; net[who].MB += b / 1048576; }
+      if ((e.name === 'MajorGC' || e.name === 'MinorGC' || e.name === 'GCEvent') && e.ph === 'X') gc[who] = (gc[who] || 0) + e.dur / 1000;
+      if ((e.name === 'EvaluateScript' || e.name === 'v8.compile') && e.ph === 'X') evalJs[who] = (evalJs[who] || 0) + e.dur / 1000;
       if (e.name === 'FunctionCall' && e.ph === 'X' && e.args?.data?.url) { const u = e.args.data.url.replace(/[?#].*$/, '').split('/').slice(-2).join('/'); const k = `${who}:${u}`; scripts[k] = (scripts[k] || 0) + e.dur / 1000; }
     }
     const per = (o) => Object.fromEntries(Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => [k, Math.round(v / secs)]));
-    res[w.name] = { seconds: +secs.toFixed(1), busyMsPerSecond: per(by), framesPerSecond: Object.fromEntries(Object.entries(frames).map(([k, v]) => [k, +(v / secs).toFixed(1)])), longTasksOver50ms: longTasks, topScriptsMsPerSecond: per(scripts) };
+    res[w.name] = { seconds: +secs.toFixed(1), busyMsPerSecond: per(by), framesPerSecond: Object.fromEntries(Object.entries(frames).map(([k, v]) => [k, +(v / secs).toFixed(1)])), longTasksOver50ms: longTasks, topScriptsMsPerSecond: per(scripts), network: Object.fromEntries(Object.entries(net).map(([k, v]) => [k, { requests: v.requests, MB: +v.MB.toFixed(1) }])), gcMs: Object.fromEntries(Object.entries(gc).map(([k, v]) => [k, Math.round(v)])), parseCompileMs: Object.fromEntries(Object.entries(evalJs).map(([k, v]) => [k, Math.round(v)])) };
   }
   return res;
 }
