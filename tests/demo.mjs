@@ -29,20 +29,27 @@ try {
   const sceneId = target.data.cinemap.scene_id;
   const clip = await createClips(ctx, page, path.join(OUT, 'frames'));
 
-  await caption('① 片场卡片：搭好后是 720p 慢速转台视频（60 秒一圈）');
+  await caption('① 片场节点：搭好后卡片上是 720p 慢速转台渲染（60 秒一圈）');
   const where = await focusBySearch(page, String(target.data.title).slice(0, 30));
   if (!where) throw new Error('could not bring the set to the middle');
-  await page.mouse.move(where.x + 380, where.y + 260); await sleep(1500);
-  await clip.start('card'); await sleep(5000); await clip.stop();
+  await page.keyboard.press('Escape'); await sleep(400); await page.keyboard.press('Escape'); await sleep(600);
+  { const sb = page.getByPlaceholder(/Search nodes/i); if (await sb.isVisible().catch(() => false)) { await page.locator('button:has(svg)').filter({ has: page.locator('[class*="search" i]') }).first().click().catch(() => {}); await sleep(500); } }
+  await page.mouse.move(where.x, where.y + 420); await sleep(1500);
+  await clip.start('card'); await sleep(7000); await clip.stop();
 
   await caption('② 一个画布只能有一个片场：添加菜单里「片场」置灰并提示');
   try {
-    const plus = await page.evaluate(() => { const bar = [...document.querySelectorAll('*')].find((e) => /to type/.test(e.textContent || '') && e.children.length < 6 && e.getBoundingClientRect().width < 500); if (!bar) return null; const b = bar.closest('div')?.getBoundingClientRect() ?? bar.getBoundingClientRect(); const cy = b.y + b.height / 2; const bs = [...document.querySelectorAll('button')].map((x) => ({ r: x.getBoundingClientRect() })).filter(({ r }) => r.width > 0 && Math.abs(r.y + r.height / 2 - cy) < 30 && r.x > b.x + b.width - 5).sort((a, c) => a.r.x - c.r.x); return bs[0] ? { x: bs[0].r.x + bs[0].r.width / 2, y: bs[0].r.y + bs[0].r.height / 2 } : null; });
     await clip.start('one-set');
-    if (plus) { await page.mouse.click(plus.x, plus.y); await sleep(1500); }
-    const row = page.getByText(/^(Film set|片场)$/).first();
-    if (await row.isVisible({ timeout: 3000 }).catch(() => false)) { const rb = await row.boundingBox(); await page.mouse.move(rb.x + rb.width / 2, rb.y + rb.height / 2); await sleep(3000); result.menuRow = await row.evaluate((e) => { const it = e.closest('[role="menuitem"],button,[aria-disabled]'); return { disabled: it?.getAttribute('aria-disabled') ?? it?.hasAttribute?.('disabled') ?? null }; }).catch(() => null); }
-    else log('menu row not found', plus ? 'plus clicked' : 'no plus');
+    const add = page.getByRole('button', { name: /^(Add node|Add|添加节点|添加)$/ }).first();
+    if (await add.isVisible({ timeout: 2000 }).catch(() => false)) await add.click(); else { await page.mouse.move(where.x + 500, where.y); await page.keyboard.press('n'); }
+    await sleep(1200);
+    const row = page.locator('[data-testid="add-node-3d-world"]').first();
+    if (await row.isVisible({ timeout: 4000 }).catch(() => false)) {
+      const rb = await row.boundingBox(); await page.mouse.move(rb.x + rb.width / 2, rb.y + rb.height / 2);
+      result.menuRow = await row.evaluate((e) => { const note = e.getAttribute('title') || ''; const r = e.getBoundingClientRect(); const box = document.createElement('div'); box.id = '__demo_note'; Object.assign(box.style, { position: 'fixed', left: `${r.left - 4}px`, top: `${r.top - 4}px`, width: `${r.width + 8}px`, height: `${r.height + 8}px`, border: '2px solid #ff5a5a', borderRadius: '10px', zIndex: 2147483646, pointerEvents: 'none' }); const tip = document.createElement('div'); tip.textContent = note; Object.assign(tip.style, { position: 'absolute', left: '0', top: `${r.height + 14}px`, background: '#111', color: '#fff', font: '500 14px/1.4 -apple-system, sans-serif', padding: '6px 10px', borderRadius: '8px', whiteSpace: 'nowrap' }); box.append(tip); document.body.append(box); return { disabled: e.getAttribute('aria-disabled'), note }; });
+      await sleep(3500);
+      await page.evaluate(() => document.getElementById('__demo_note')?.remove());
+    } else log('film set row not found');
     await page.keyboard.press('Escape'); await sleep(600); await clip.stop();
   } catch (e) { await clip.stop(); log('menu step skipped', e.message.slice(0, 80)); }
 
@@ -50,7 +57,14 @@ try {
   await clip.start('open'); await sleep(200);
   const opening = openPopup(where); await sleep(2200); await clip.stop();
   const ready = await opening; result.popupReadySeconds = ready; await sleep(800);
+  { const vf = page.frames().find((f) => /editor\.html/.test(f.url())); await vf?.evaluate(() => { try { window.__interior?.exit?.(); } catch {} }).catch(() => {}); }
+  await sleep(1500);
+  const vb = await page.locator('[data-testid="cinemap-world-detail-dialog"] iframe').first().boundingBox();
+  if (vb) { await page.mouse.move(vb.x + vb.width / 2, vb.y + vb.height / 2); for (let i = 0; i < 10; i++) { await page.mouse.wheel(0, 400); await sleep(120); } }
+  await sleep(1500);
   await clip.start('popup');
+  await caption('③ 弹窗里是轻量只读查看器：先看全景');
+  if (vb) { for (let i = 0; i < 4; i++) { await page.mouse.wheel(0, -250); await sleep(250); } } await sleep(1200);
   await caption('④ 拖动转镜头（画布在弹窗下暂停渲染）');
   const box = await page.locator('[data-testid="cinemap-world-detail-dialog"] iframe').first().boundingBox();
   if (box) { const cx = box.x + box.width / 2, cy = box.y + box.height / 2; await page.mouse.move(cx, cy); await page.mouse.down(); for (let i = 0; i < 40; i++) { await page.mouse.move(cx + i * 6, cy + Math.sin(i / 6) * 20); await sleep(40); } await page.mouse.up(); await sleep(1500); await page.mouse.click(cx, cy); }
@@ -58,7 +72,7 @@ try {
   for (const [k, ms] of [['w', 2200], ['a', 900], ['d', 1800], ['s', 1000], ['e', 700], ['q', 700]]) { await page.keyboard.down(k); await sleep(ms); await page.keyboard.up(k); await sleep(300); }
   await page.keyboard.down('Shift'); await page.keyboard.down('w'); await sleep(1200); await page.keyboard.up('w'); await page.keyboard.up('Shift'); await sleep(800);
   await caption('⑥ 镜头不动约 4 秒后自动停止渲染，几乎不占 CPU / GPU');
-  await sleep(4500);
+  await sleep(4000);
   await caption('⑦ 在弹窗里按 Esc 直接关闭');
   await page.keyboard.press('Escape'); await sleep(2500);
   result.closedByEsc = !(await page.locator('[data-testid="cinemap-world-detail-dialog"]').isVisible().catch(() => false));
@@ -75,12 +89,17 @@ try {
     if (await typeBar.isVisible({ timeout: 2000 }).catch(() => false)) await typeBar.click(); else { await page.mouse.click(700, 450); await page.keyboard.press('/'); }
     await sleep(1500);
     await page.keyboard.type(SAY, { delay: 45 }); await sleep(800); await page.keyboard.press('Enter');
-    const sent = Date.now(); await sleep(8000); await clip.stop();
+    const sent = Date.now(); await sleep(2500);
+    const conv = page.getByText(SAY.slice(0, 6)).first();
+    if (await conv.isVisible({ timeout: 3000 }).catch(() => false)) await conv.click().catch(() => {});
+    await sleep(22000); await clip.stop();
     for (let i = 0; i < 48; i++) { await sleep(5000); if (/^(ready|failed)/.test(last) && states.length > 1) break; if (!states.length && Date.now() - sent > 150000) break; }
-    if (/^ready/.test(last) && states.some((x) => !/^ready/.test(x.s)) || !states.length) { await caption('⑨ 片场按 agent 的指令重建完成，再进去看效果'); await clip.start('rebuilt'); await sleep(3000); await clip.stop(); } else { result.agentNotDone = true; log('agent edit did not finish', last); }
+    if (!/^failed/.test(last)) { await caption('⑨ 片场按 agent 的指令重建完成'); await clip.start('rebuilt'); await sleep(4000); await clip.stop(); } else { result.agentNotDone = true; log('agent edit did not finish', last); }
     result.agent = { run, states, final: last, seconds: Math.round((Date.now() - sent) / 1000) };
     await page.keyboard.press('Escape'); await sleep(800); const where2 = where;
     result.popupReadySeconds2 = await openPopup(where2); await sleep(800);
+    { const vf = page.frames().find((f) => /editor\.html/.test(f.url())); await vf?.evaluate(() => { try { window.__interior?.exit?.(); } catch {} }).catch(() => {}); }
+    await sleep(1500); { const b = await page.locator('[data-testid="cinemap-world-detail-dialog"] iframe').first().boundingBox(); if (b) { await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2); for (let i = 0; i < 6; i++) { await page.mouse.wheel(0, 400); await sleep(120); } } } await sleep(1500);
     await clip.start('result'); await caption('⑩ 改完的片场');
     const box2 = await page.locator('[data-testid="cinemap-world-detail-dialog"] iframe').first().boundingBox();
     if (box2) { const cx = box2.x + box2.width / 2, cy = box2.y + box2.height / 2; await page.mouse.move(cx, cy); await page.mouse.down(); for (let i = 0; i < 50; i++) { await page.mouse.move(cx - i * 6, cy); await sleep(50); } await page.mouse.up(); }

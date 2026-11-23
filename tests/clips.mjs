@@ -24,7 +24,7 @@ export async function createClips(ctx, page, dir, { fps = 25, quality = 82, maxW
   });
   const api = {
     async start(name) { if (cur) await api.stop(); cur = { name, frames: [], t0: Date.now() }; await cdp.send('Page.startScreencast', { format: 'jpeg', quality, maxWidth, maxHeight, everyNthFrame: 1 }); },
-    async stop() { if (!cur) return; await new Promise((r) => setTimeout(r, 300)); await cdp.send('Page.stopScreencast').catch(() => {}); cur.t1 = Date.now(); segs.push(cur); cur = null; },
+    async stop() { if (!cur) return; await new Promise((r) => setTimeout(r, 200)); const seg = cur; seg.t1 = Date.now(); cur = null; segs.push(seg); await cdp.send('Page.stopScreencast').catch(() => {}); }, // the end is when we said stop: a busy page can answer stopScreencast seconds later
     /** Stitch every segment, holding each frame until the next one (screencast only sends frames when the picture changes). */
     async render(outFile) {
       await api.stop();
@@ -34,8 +34,7 @@ export async function createClips(ctx, page, dir, { fps = 25, quality = 82, maxW
       const write = (buf) => new Promise((r) => (p.stdin.write(buf) ? r() : p.stdin.once('drain', r)));
       let out = 0; const lens = [];
       for (const s of segs) {
-        const f = s.frames; if (!f.length) continue; let segFrames = 0;
-        const end = f[0].t + (s.t1 - s.t0) / 1000; // hold the last picture until the segment really ended
+        const end = s.t1 / 1000, f = s.frames.filter((x) => x.t <= end).sort((a, b) => a.t - b.t); if (!f.length) continue; let segFrames = 0; // frame timestamps are wall-clock seconds
         for (let i = 0; i < f.length; i++) {
           const until = i + 1 < f.length ? f[i + 1].t : end;
           const k = Math.max(1, Math.round((until - f[i].t) * fps)); const buf = fs.readFileSync(f[i].file);
