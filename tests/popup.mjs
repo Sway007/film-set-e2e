@@ -1,7 +1,7 @@
 // Opens a finished Film set's popup on the TapNow canvas and records a Chrome performance trace (as the DevTools Performance
 // panel) through these phases: canvas idle → opening until the 3D view is ready → popup idle → orbit drag → WASD → after close.
 // Also: the light viewer, canvas frames and card videos while the popup is open, hover highlight, shot button, memory.
-import { FE, BFF, launch, signIn, dismiss, countGpuFrames, sleep, log, result, save, shot, watchOverview, centreNode } from './lib.mjs';
+import { FE, BFF, launch, signIn, dismiss, countGpuFrames, sleep, log, result, save, shot, watchOverview, focusBySearch } from './lib.mjs';
 import { startTrace, stopTrace, mark } from './perf.mjs';
 
 const CANVAS = process.env.CANVAS_ID; if (!CANVAS) throw new Error('CANVAS_ID input is required');
@@ -21,8 +21,9 @@ try {
   const target = overview.nodes.find((n) => n.data.cinemap.status === 'ready' && MATCH.test(`${n.data.title || ''} ${n.data.cinemap.brief || ''}`));
   if (!target) throw new Error(`no finished set matching ${MATCH} on the canvas (${overview.nodes.length} film set nodes)`);
   result.set = target.data.title || target.data.cinemap.brief; result.stats = target.data.cinemap.stats ?? null;
-  const at = await centreNode(page, target, overview.nodes);
+  const at = await focusBySearch(page, String(result.set).slice(0, 30));
   if (!at) throw new Error('could not bring the set to the middle of the canvas');
+  await shot(page, '0-focused');
   await page.mouse.move(at.x, at.y); await sleep(5000);
   result.cardsBefore = await vids();
 
@@ -30,7 +31,8 @@ try {
   await mark(page, 'canvas-idle'); const f0 = await frames(); await sleep(5000); result.canvasFramesIdle5s = (await frames()) - f0;
 
   await mark(page, 'open-until-ready'); const t0 = Date.now();
-  const viaButton = await page.evaluate(() => { const b = [...document.querySelectorAll('[data-testid="cinemap-world-enter"]')].find((e) => { const r = e.getBoundingClientRect(); return r.width && r.x > 0 && r.y > 0 && r.x < innerWidth && r.y < innerHeight; }); if (b) { b.click(); return true; } return false; });
+  // The set is in the middle now: its hover button when the card has its DOM (the nearest one to the middle), else a double click.
+  const viaButton = await page.evaluate(({ x, y }) => { const bs = [...document.querySelectorAll('[data-testid="cinemap-world-enter"]')].map((e) => { const r = e.getBoundingClientRect(); return { e, d: Math.hypot(r.x + r.width / 2 - x, r.y + r.height / 2 - y), ok: r.width > 0 }; }).filter((b) => b.ok && b.d < 400).sort((a, b) => a.d - b.d); if (bs[0]) { bs[0].e.click(); return true; } return false; }, at);
   if (!viaButton) await page.mouse.dblclick(at.x, at.y);
   let state = null;
   for (let i = 0; i < 180; i++) {

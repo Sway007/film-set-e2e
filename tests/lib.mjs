@@ -102,3 +102,16 @@ export async function centreNode(page, node, all) {
   }
   return null;
 }
+
+/** Jumps the canvas to a node with the canvas's own node search (it fits the view to the node); returns the pane centre. */
+export async function focusBySearch(page, text) {
+  let opened = false;
+  for (const name of [/^Node search$/i, /Search nodes/i]) { const b = page.getByRole('button', { name }); if (await b.count().catch(() => 0)) { await b.first().click(); opened = true; break; } }
+  if (!opened) { const btn = await page.evaluate(() => { const bs = [...document.querySelectorAll('button')].filter((b) => { const r = b.getBoundingClientRect(); return r.top < 140 && r.left > innerWidth * 0.6 && r.width < 60; }); bs.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left); const r = bs[0]?.getBoundingClientRect(); return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null; }); if (btn) await page.mouse.click(btn.x, btn.y); }
+  const input = page.getByPlaceholder(/Search nodes/i);
+  await input.waitFor({ timeout: 10000 });
+  await input.fill(text); await sleep(2500);
+  await page.keyboard.press('Enter'); await sleep(2500);
+  if (await input.count().catch(() => 0)) { await page.keyboard.press('Escape'); await sleep(800); }
+  return page.evaluate(() => { const r = document.querySelector('.react-flow')?.getBoundingClientRect(); return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null; });
+}
