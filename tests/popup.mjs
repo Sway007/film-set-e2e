@@ -53,7 +53,10 @@ try {
   const viewerInfo = async () => (viewerFrame ? viewerFrame.evaluate(() => ({ lite: !!window.__nodeLite, heapMB: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null, info: window.__workshop?.renderer?.info?.render ? { calls: window.__workshop.renderer.info.render.calls, triangles: window.__workshop.renderer.info.render.triangles } : null })).catch((e) => ({ error: e.message.slice(0, 80) })) : null);
   result.viewer = await viewerInfo();
 
+  const idleState = () => viewerFrame?.evaluate(() => { const I = window.__nodeIdle, R = window.__nodeRoam; return { idle: I ? { asleep: I.asleep, sleeps: I.sleeps, frames: I.frames } : null, roam: !!R, roamMoving: R ? !!R.moving : null, hasFocus: document.hasFocus() }; }).catch((e) => ({ error: e.message.slice(0, 80) }));
+  result.idleAtReady = await idleState();
   await mark(page, 'popup-idle'); const f1 = await frames(); await sleep(10000);
+  result.idleAfter10s = await idleState();
   result.canvasFramesWhilePopupIdle10s = (await frames()) - f1; result.cardsWhileOpen = await vids();
   const stage = await page.locator('[data-testid="cinemap-world-stage"]').boundingBox();
   if (stage) {
@@ -61,7 +64,9 @@ try {
     await mark(page, 'popup-hover'); for (let i = 0; i < 40; i++) { await page.mouse.move(cx - 300 + i * 15, cy - 100 + (i % 5) * 40); await sleep(100); } await shot(page, '2-hover');
     await mark(page, 'popup-orbit'); await page.mouse.move(cx, cy); await page.mouse.down(); await page.mouse.move(cx + 400, cy + 60, { steps: 60 }); await page.mouse.up(); await page.mouse.wheel(0, -400); await sleep(1500); await shot(page, '3-orbit');
     await mark(page, 'popup-wasd'); await page.mouse.click(cx, cy); const before = await viewerFrame?.evaluate(() => window.__workshop?.camera?.position?.toArray?.() ?? null).catch(() => null);
-    await page.keyboard.down('w'); await sleep(1500); await page.keyboard.up('w'); await page.keyboard.down('d'); await sleep(1000); await page.keyboard.up('d');
+    result.beforeKeys = await idleState();
+    result.focusedFrame = await page.evaluate(() => document.activeElement?.tagName + (document.activeElement?.title ? `:${document.activeElement.title}` : ''));
+    await page.keyboard.down('w'); await sleep(700); result.whileW = await idleState(); await sleep(800); await page.keyboard.up('w'); await page.keyboard.down('d'); await sleep(1000); await page.keyboard.up('d');
     const after = await viewerFrame?.evaluate(() => window.__workshop?.camera?.position?.toArray?.() ?? null).catch(() => null);
     result.wasd = { before, after, moved: !!(before && after && before.some((v, i) => Math.abs(v - after[i]) > 0.01)) }; await shot(page, '4-wasd');
   }
