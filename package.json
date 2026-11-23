@@ -1,0 +1,9 @@
+{
+  "name": "film-set-e2e",
+  "private": true,
+  "type": "module",
+  "description": "TapNow Film set node checks on a real Mac with a GPU (self-hosted runner)",
+  "dependencies": {
+    "playwright": "1.48.2"
+  }
+}

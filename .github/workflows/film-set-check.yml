@@ -1,0 +1,59 @@
+name: Film set check (Mac GPU)
+
+on:
+  workflow_dispatch:
+    inputs:
+      test:
+        description: popup | build
+        required: true
+        default: popup
+      browser:
+        description: chromium | webkit
+        required: true
+        default: chromium
+      vercel_share:
+        description: Vercel share token of the FE preview (from the PR's preview comment)
+        required: false
+        default: ''
+      canvas_id:
+        description: TapNow canvas id
+        required: false
+        default: 81438291-cfbc-4915-aea6-e773b8a53b26
+      set_match:
+        description: popup test, text of the set to open
+        required: false
+        default: airport
+      sentence:
+        description: build test, the sentence for the new set
+        required: false
+        default: A quiet bus stop at dusk with one bench and a streetlight
+
+# Only this Mac's runner (label sway-gpu) takes these jobs; nothing else runs here.
+jobs:
+  check:
+    runs-on: [self-hosted, macOS, sway-gpu]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - run: npx playwright install ${{ inputs.browser }}
+      - name: Run
+        env:
+          BROWSER: ${{ inputs.browser }}
+          VERCEL_SHARE: ${{ inputs.vercel_share }}
+          CANVAS_ID: ${{ inputs.canvas_id }}
+          SET_MATCH: ${{ inputs.set_match }}
+          SENTENCE: ${{ inputs.sentence }}
+          T_USER: ${{ secrets.TAPNOW_USER }}
+          T_PASS: ${{ secrets.TAPNOW_PASS }}
+          OUT_DIR: out
+        run: node tests/${{ inputs.test }}.mjs
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: film-set-${{ inputs.test }}-${{ inputs.browser }}-${{ github.run_number }}
+          path: out
+          retention-days: 7
