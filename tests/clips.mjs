@@ -34,7 +34,7 @@ export async function createClips(ctx, page, dir, { fps = 25, quality = 82, maxW
       const write = (buf) => new Promise((r) => (p.stdin.write(buf) ? r() : p.stdin.once('drain', r)));
       let out = 0; const lens = [];
       for (const s of segs) {
-        const end = s.t1 / 1000, f = s.frames.filter((x) => x.t <= end).sort((a, b) => a.t - b.t); if (!f.length) continue; let segFrames = 0; // frame timestamps are wall-clock seconds
+        const start = s.t0 / 1000, end = s.t1 / 1000, f = s.frames.map((x) => ({ ...x, t: Math.max(x.t, start) })).filter((x) => x.t <= end).sort((a, b) => a.t - b.t); // a still page's first frame carries the time of its last repaint: count it from the segment's start if (!f.length) continue; let segFrames = 0; // frame timestamps are wall-clock seconds
         for (let i = 0; i < f.length; i++) {
           const until = i + 1 < f.length ? f[i + 1].t : end;
           const k = Math.max(1, Math.round((until - f[i].t) * fps)); const buf = fs.readFileSync(f[i].file);

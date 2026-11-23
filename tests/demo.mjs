@@ -62,6 +62,7 @@ try {
   const vb = await page.locator('[data-testid="cinemap-world-detail-dialog"] iframe').first().boundingBox();
   if (vb) { await page.mouse.move(vb.x + vb.width / 2, vb.y + vb.height / 2); for (let i = 0; i < 10; i++) { await page.mouse.wheel(0, 400); await sleep(120); } }
   await sleep(1500);
+  result.overviewCamY = await page.frames().find((f) => /editor\.html/.test(f.url()))?.evaluate(() => Math.round(window.__workshop?.camera?.position?.y ?? -1)).catch(() => null);
   await clip.start('popup');
   await caption('③ 弹窗里是轻量只读查看器：先看全景');
   if (vb) { for (let i = 0; i < 4; i++) { await page.mouse.wheel(0, -250); await sleep(250); } } await sleep(1200);
@@ -92,7 +93,7 @@ try {
     const sent = Date.now(); await sleep(2500);
     const conv = page.getByText(SAY.slice(0, 6)).first();
     if (await conv.isVisible({ timeout: 3000 }).catch(() => false)) await conv.click().catch(() => {});
-    await sleep(22000); await clip.stop();
+    await sleep(20000); result.agentReplyShown = await page.evaluate(() => /片场|set|出租车|taxi/i.test([...document.querySelectorAll('[class*="chat" i], [class*="message" i]')].map((e) => e.innerText).join(' ').slice(-4000))).catch(() => null); await clip.stop();
     for (let i = 0; i < 48; i++) { await sleep(5000); if (/^(ready|failed)/.test(last) && states.length > 1) break; if (!states.length && Date.now() - sent > 150000) break; }
     if (!/^failed/.test(last)) { await caption('⑨ 片场按 agent 的指令重建完成'); await clip.start('rebuilt'); await sleep(4000); await clip.stop(); } else { result.agentNotDone = true; log('agent edit did not finish', last); }
     result.agent = { run, states, final: last, seconds: Math.round((Date.now() - sent) / 1000) };
