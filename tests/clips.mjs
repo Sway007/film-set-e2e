@@ -26,7 +26,7 @@ export async function createClips(ctx, page, dir, { fps = 25, quality = 82, maxW
     async start(name) { if (cur) await api.stop(); cur = { name, frames: [], t0: Date.now() }; await cdp.send('Page.startScreencast', { format: 'jpeg', quality, maxWidth, maxHeight, everyNthFrame: 1 }); },
     async stop() { if (!cur) return; await new Promise((r) => setTimeout(r, 200)); const seg = cur; seg.t1 = Date.now(); cur = null; segs.push(seg); await cdp.send('Page.stopScreencast').catch(() => {}); }, // the end is when we said stop: a busy page can answer stopScreencast seconds later
     /** Stitch every segment, holding each frame until the next one (screencast only sends frames when the picture changes). */
-    async render(outFile) {
+    async render(outFile, { speed = 1 } = {}) {
       await api.stop();
       const ff = findFfmpeg(); if (!ff) return { error: 'no ffmpeg' };
       const args = ['-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(fps), '-c:v', 'mjpeg', '-i', 'pipe:0', '-y', '-an', '-c:v', 'vp8', '-b:v', '3M', '-crf', '8', '-qmin', '0', '-qmax', '40', '-deadline', 'good', '-threads', '2', outFile];
@@ -37,7 +37,7 @@ export async function createClips(ctx, page, dir, { fps = 25, quality = 82, maxW
         const start = s.t0 / 1000, end = s.t1 / 1000, f = s.frames.map((x) => ({ ...x, t: Math.max(x.t, start) })).filter((x) => x.t <= end).sort((a, b) => a.t - b.t); // a still page's first frame carries the time of its last repaint: count it from the segment's start if (!f.length) continue; let segFrames = 0; // frame timestamps are wall-clock seconds
         for (let i = 0; i < f.length; i++) {
           const until = i + 1 < f.length ? f[i + 1].t : end;
-          const k = Math.max(1, Math.round((until - f[i].t) * fps)); const buf = fs.readFileSync(f[i].file);
+          const k = Math.max(1, Math.round((until - f[i].t) * fps / speed)); const buf = fs.readFileSync(f[i].file);
           for (let j = 0; j < k; j++) await write(buf);
           out += k; segFrames += k;
         }
