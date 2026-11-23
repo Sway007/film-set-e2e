@@ -128,7 +128,7 @@ export async function readFrameStats(frame) {
 }
 
 /** Turns the per-callback counting on / off in a document (metrics.mjs). */
-export const siteCounting = (frame, on) => frame.evaluate((v) => { window.__fsSiteOn = v; if (window.__fsC) window.__fsC.sites = {}; }, on).catch(() => {});
+export const siteCounting = (frame, on) => frame.evaluate((v) => { window.__fsSiteOn = v; if (v && window.__fsC) window.__fsC.sites = {}; }, on).catch(() => {});
 
 /** What runs in a document besides rendering: running CSS / Web animations, and timer / rAF callbacks per second (counters in metrics.mjs). */
 export async function backgroundWork(frame) {
