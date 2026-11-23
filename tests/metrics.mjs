@@ -1,16 +1,21 @@
 // Light performance recording for the film set popup: a few counters read at phase boundaries, not a full trace.
 // - CPU: Chrome's cumulative per-process counters (CDP Performance.getMetrics: script, layout, style, task time, heap),
 //   for the TapNow page and for the CineMap iframe (its own process), as deltas per phase.
-// - Frames: requestAnimationFrame callbacks counted in each document (the viewer's render loop; the canvas page) and the
+// - Frames: frames with a requestAnimationFrame callback in each document (the viewer's render loop; the canvas page) and the
 //   canvas's WebGPU submits.
 // - Jank: long tasks (> 50 ms) count and total per document.
 // - Network: bytes and requests the iframe loaded per phase (Resource Timing).
 export async function installCounters(page) {
   await page.addInitScript(() => {
     if (window.__fsC) return;
-    const c = (window.__fsC = { raf: 0, longN: 0, longMs: 0 });
-    const raf = window.requestAnimationFrame.bind(window);
-    window.requestAnimationFrame = (cb) => raf((t) => { c.raf++; cb(t); });
+    const c = (window.__fsC = { raf: 0, rafFrames: 0, to: 0, iv: 0, longN: 0, longMs: 0 });
+    try { performance.setResourceTimingBufferSize(20000); } catch {} // the default 250 cut the open's count off at 250
+    // raf: rAF callbacks (several loops each count); rafFrames: frames in which any rAF callback ran (the real frame rate).
+    const raf = window.requestAnimationFrame.bind(window); let lastT = -1;
+    window.requestAnimationFrame = (cb) => raf((t) => { c.raf++; if (t !== lastT) { lastT = t; c.rafFrames++; } cb(t); });
+    const st = window.setTimeout.bind(window), si = window.setInterval.bind(window);
+    window.setTimeout = (fn, ...a) => st(typeof fn === 'function' ? (...x) => { c.to++; return fn(...x); } : fn, ...a);
+    window.setInterval = (fn, ...a) => si(typeof fn === 'function' ? (...x) => { c.iv++; return fn(...x); } : fn, ...a);
     try { new PerformanceObserver((l) => { for (const e of l.getEntries()) { c.longN++; c.longMs += e.duration; } }).observe({ type: 'longtask', buffered: true }); } catch {}
   });
 }
@@ -33,7 +38,7 @@ async function snapshot(page, opened) {
   for (const f of page.frames()) {
     const who = f === page.mainFrame() ? 'page' : /editor\.html/.test(f.url()) ? 'viewer' : /\/p\/[^?]+\?embed=node/.test(f.url()) ? 'iframe' : null;
     if (!who) continue;
-    try { out.docs[who] = await f.evaluate(() => { const c = window.__fsC || {}; const r = performance.getEntriesByType('resource'); return { raf: c.raf || 0, longN: c.longN || 0, longMs: c.longMs || 0, gpuSubmits: window.__fsSubmits ?? null, requests: r.length, bytes: r.reduce((a, e) => a + (e.transferSize || 0), 0) }; }); } catch {}
+    try { out.docs[who] = await f.evaluate(() => { const c = window.__fsC || {}; const r = performance.getEntriesByType('resource'); return { raf: c.rafFrames || 0, longN: c.longN || 0, longMs: c.longMs || 0, gpuSubmits: window.__fsSubmits ?? null, requests: r.length, bytes: r.reduce((a, e) => a + (e.transferSize || 0), 0) }; }); } catch {}
   }
   return out;
 }

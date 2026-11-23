@@ -4,6 +4,7 @@
 import { FE, BFF, launch, signIn, dismiss, countGpuFrames, sleep, log, result, save, shot, watchOverview, focusBySearch } from './lib.mjs';
 import { startTrace, stopTrace } from './perf.mjs';
 import { installCounters, openSessions, createRecorder } from './metrics.mjs';
+import { startProfile, stopProfile, netCollector, installFrameStats, readFrameStats, backgroundWork } from './profile.mjs';
 const FULL_TRACE = process.env.FULL_TRACE === '1';
 
 const CANVAS = process.env.CANVAS_ID; if (!CANVAS) throw new Error('CANVAS_ID input is required');
@@ -34,6 +35,11 @@ try {
   const mark = (_p, name) => rec.mark(name);
   await mark(page, 'canvas-idle'); const f0 = await frames(); await sleep(5000); result.canvasFramesIdle5s = (await frames()) - f0;
 
+  // Profile the iframe's process from the moment it exists (its own process: it is created by the click below), and log its network.
+  const net = netCollector(ctx, page); let openProf = null;
+  const onNav = (f) => { if (!openProf && /\/p\/[^?]+\?embed=node/.test(f.url())) openProf = ctx.newCDPSession(f).then((s) => startProfile(s)).catch((e) => ({ error: e.message.slice(0, 80) })); };
+  page.on('framenavigated', onNav);
+  net.start();
   await mark(page, 'open-until-ready'); const t0 = Date.now();
   // The set is in the middle now: its hover button when the card has its DOM (the nearest one to the middle), else a double click.
   const viaButton = await page.evaluate(({ x, y }) => { const bs = [...document.querySelectorAll('[data-testid="cinemap-world-enter"]')].map((e) => { const r = e.getBoundingClientRect(); return { e, d: Math.hypot(r.x + r.width / 2 - x, r.y + r.height / 2 - y), ok: r.width > 0 }; }).filter((b) => b.ok && b.d < 400).sort((a, b) => a.d - b.d); if (bs[0]) { bs[0].e.click(); return true; } return false; }, at);
@@ -47,6 +53,11 @@ try {
   }
   result.popup = { ...state, readySeconds: state.iframe && state.coverShown === false ? (Date.now() - t0) / 1000 : null, opened: viaButton ? 'button' : 'double click' };
   log('popup', JSON.stringify(result.popup));
+  page.off('framenavigated', onNav);
+  const prof = await openProf; let profSession = prof && !prof.error ? prof : null;
+  if (profSession) result.openProfile = await stopProfile(profSession).catch((e) => ({ error: e.message.slice(0, 80) })); else result.openProfile = prof?.error ?? 'iframe not out of process';
+  result.openNet = await net.stop();
+  const profileFor = async (ms, fn) => { if (!profSession) return null; await startProfile(profSession); const extra = fn ? await fn() : await sleep(ms); return { ...(await stopProfile(profSession, 12).catch((e) => ({ error: e.message.slice(0, 80) }))), ...(extra || {}) }; };
   await shot(page, '1-popup');
   rec.attach(await openSessions(ctx, page));
   const viewerFrame = page.frames().find((f) => /editor\.html/.test(f.url()));
@@ -57,16 +68,32 @@ try {
   result.idleAtReady = await idleState();
   await mark(page, 'popup-idle'); const f1 = await frames(); await sleep(10000);
   result.idleAfter10s = await idleState();
+  // Asleep: what still costs (timers, polling, CSS animations, other loops).
+  if (viewerFrame) {
+    const iframeFrame = page.frames().find((f) => /\/p\/[^?]+\?embed=node/.test(f.url()));
+    const bg0 = { viewer: await backgroundWork(viewerFrame), iframe: iframeFrame ? await backgroundWork(iframeFrame) : null };
+    await mark(page, 'popup-asleep');
+    const p = await profileFor(5000);
+    const bg1 = { viewer: await backgroundWork(viewerFrame), iframe: iframeFrame ? await backgroundWork(iframeFrame) : null };
+    const per5 = (k) => (bg1[k] && bg0[k]?.timers ? { animations: bg1[k].animations, animationNames: bg1[k].animationNames, timeouts5s: bg1[k].timers.timeout - bg0[k].timers.timeout, intervals5s: bg1[k].timers.interval - bg0[k].timers.interval, rafFrames5s: bg1[k].timers.rafFrames - bg0[k].timers.rafFrames } : bg1[k]);
+    result.asleep = { state: await idleState(), profile: p, viewer: per5('viewer'), iframe: per5('iframe') };
+  }
+  if (viewerFrame) await installFrameStats(viewerFrame);
   result.canvasFramesWhilePopupIdle10s = (await frames()) - f1; result.cardsWhileOpen = await vids();
   const stage = await page.locator('[data-testid="cinemap-world-stage"]').boundingBox();
   if (stage) {
     const cx = stage.x + stage.width / 2, cy = stage.y + stage.height / 2;
+    if (viewerFrame) await readFrameStats(viewerFrame);
     await mark(page, 'popup-hover'); for (let i = 0; i < 40; i++) { await page.mouse.move(cx - 300 + i * 15, cy - 100 + (i % 5) * 40); await sleep(100); } await shot(page, '2-hover');
-    await mark(page, 'popup-orbit'); await page.mouse.move(cx, cy); await page.mouse.down(); await page.mouse.move(cx + 400, cy + 60, { steps: 60 }); await page.mouse.up(); await page.mouse.wheel(0, -400); await sleep(1500); await shot(page, '3-orbit');
+    result.hoverFrames = viewerFrame ? await readFrameStats(viewerFrame) : null;
+    await mark(page, 'popup-orbit');
+    result.orbit = await profileFor(0, async () => { await page.mouse.move(cx, cy); await page.mouse.down(); await page.mouse.move(cx + 400, cy + 60, { steps: 60 }); await page.mouse.up(); await page.mouse.wheel(0, -400); await sleep(1500); return { frames: viewerFrame ? await readFrameStats(viewerFrame) : null }; });
+    await shot(page, '3-orbit');
     await mark(page, 'popup-wasd'); await page.mouse.click(cx, cy); const before = await viewerFrame?.evaluate(() => window.__workshop?.camera?.position?.toArray?.() ?? null).catch(() => null);
     result.beforeKeys = await idleState();
     result.focusedFrame = await page.evaluate(() => document.activeElement?.tagName + (document.activeElement?.title ? `:${document.activeElement.title}` : ''));
-    await page.keyboard.down('w'); await sleep(700); result.whileW = await idleState(); await sleep(800); await page.keyboard.up('w'); await page.keyboard.down('d'); await sleep(1000); await page.keyboard.up('d');
+    if (viewerFrame) await readFrameStats(viewerFrame);
+    result.wasdProfile = await profileFor(0, async () => { await page.keyboard.down('w'); await sleep(700); result.whileW = await idleState(); await sleep(800); await page.keyboard.up('w'); await page.keyboard.down('d'); await sleep(1000); await page.keyboard.up('d'); return { frames: viewerFrame ? await readFrameStats(viewerFrame) : null }; });
     const after = await viewerFrame?.evaluate(() => window.__workshop?.camera?.position?.toArray?.() ?? null).catch(() => null);
     result.wasd = { before, after, moved: !!(before && after && before.some((v, i) => Math.abs(v - after[i]) > 0.01)) }; await shot(page, '4-wasd');
   }
