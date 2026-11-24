@@ -14,10 +14,10 @@ const { ctx, page } = await launch();
 const t0 = Date.now(); const at = () => Math.round((Date.now() - t0) / 1000);
 
 async function mediaCheck(label) {
-  const urls = new Set();
+  const urls = new Set(); const where = {};
   for (const n of overview.nodes.concat(overview.all)) {
-    const walk = (o) => { if (typeof o === 'string') { if (/^https:\/\/[^ ]+\.(mp4|webm|mov|png|jpe?g|webp)(\?|$)|\/storage\/uploads\//i.test(o)) urls.add(o); } else if (Array.isArray(o)) o.forEach(walk); else if (o && typeof o === 'object') Object.values(o).forEach(walk); };
-    walk(n.data);
+    const walk = (o, path) => { if (typeof o === 'string') { if (/^https:\/\/[^ ]+\.(mp4|webm|mov|png|jpe?g|webp)(\?|$)|\/storage\/uploads\//i.test(o)) { urls.add(o); where[o] = `${n.type}:${path.replace(/\.\d+/g, '[]')}@${String(n.updated_at || n.created_at || '').slice(0, 10)}`; } } else if (Array.isArray(o)) o.forEach((v, i) => walk(v, `${path}.${i}`)); else if (o && typeof o === 'object') Object.entries(o).forEach(([k, v]) => walk(v, `${path}.${k}`)); };
+    walk(n.data, 'data');
   }
   for (const u of await page.evaluate(() => [...document.querySelectorAll('.react-flow__node video, .react-flow__node img')].map((e) => e.currentSrc || e.src).filter((s) => /^https:/.test(s)))) urls.add(u);
   const byHost = {};
@@ -25,6 +25,7 @@ async function mediaCheck(label) {
     let host = '?'; try { host = new URL(u).host; } catch {}
     const r = await page.request.get(u, { headers: { Range: 'bytes=0-1023' }, timeout: 30000, failOnStatusCode: false }).then((x) => x.status()).catch(() => 'error');
     const k = `${host} ${r}`; byHost[k] = (byHost[k] || 0) + 1;
+    if (!/^20[06]$/.test(String(r))) log('bad media', host, r, where[u] || 'dom');
   }
   const bad = Object.entries(byHost).filter(([k]) => !/ 20[06]$/.test(k));
   result[label] = { urls: urls.size, byHost, bad: bad.length };
@@ -70,7 +71,10 @@ try {
   await page.getByRole('button', { name: 'Add node' }).click(); await sleep(1500);
   await page.getByTestId('add-node-3d-world').click(); await sleep(4000); await dismiss(page);
   const box = page.locator('[data-testid="cinemap-world-empty-brief"]').last();
-  await box.scrollIntoViewIfNeeded(); await box.click(); await box.fill(SENTENCE);
+  await dismiss(page); await shot(page, 'before-type');
+  await box.scrollIntoViewIfNeeded({ timeout: 60000 }).catch(() => {});
+  await box.click({ timeout: 60000, force: true }).catch((e) => log('click', e.message.split('\n').slice(-2).join(' ').slice(0, 200)));
+  await box.fill(SENTENCE, { timeout: 60000, force: true });
   await shot(page, 'added');
   const sent = at(); await page.keyboard.press('Enter'); log('sent'); result.sentence = SENTENCE;
 
