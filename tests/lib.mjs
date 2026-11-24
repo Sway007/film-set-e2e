@@ -19,13 +19,13 @@ export function save() {
 }
 
 /** Opens the browser: Chrome with the Mac's GPU (or WebKit, Safari's engine), headed so the GPU is really used. */
-export async function launch(browserName = process.env.BROWSER || 'chromium') {
+export async function launch(browserName = process.env.BROWSER || 'chromium', { args = [] } = {}) {
   const dir = path.join(os.homedir(), '.film-set-e2e', `profile-${browserName}`);
   const headless = process.env.HEADLESS === '1';
   const opts = { viewport: { width: 1600, height: 1000 }, headless, recordVideo: { dir: OUT, size: { width: 1600, height: 1000 } } };
   const ctx = browserName === 'webkit'
     ? await webkit.launchPersistentContext(dir, opts)
-    : await chromium.launchPersistentContext(dir, { ...opts, channel: process.env.CHROME_CHANNEL || undefined, args: ['--enable-gpu-rasterization', '--ignore-gpu-blocklist'] });
+    : await chromium.launchPersistentContext(dir, { ...opts, channel: process.env.CHROME_CHANNEL || undefined, args: ['--enable-gpu-rasterization', '--ignore-gpu-blocklist', ...args] });
   const page = ctx.pages()[0] || (await ctx.newPage());
   result.browser = browserName; result.userAgent = await page.evaluate(() => navigator.userAgent);
   return { ctx, page };
