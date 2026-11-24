@@ -68,12 +68,10 @@ try {
   await ctx.grantPermissions(['camera', 'microphone']).catch(() => {});
   // Let every iframe (the popup's, and the viewer's inside it) use a camera, so the viewer's document may capture (see above).
   await page.addInitScript(() => {
-    const ADD = 'camera *; microphone *'; const sa = Element.prototype.setAttribute; const add = (v) => (v ? `${v}; ${ADD}` : ADD);
+    const ADD = 'camera *; microphone *'; const sa = Element.prototype.setAttribute; const add = (v) => (window.__allowCam === false ? v : v ? `${v}; ${ADD}` : ADD);
     const d = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'allow');
     if (d?.set) Object.defineProperty(HTMLIFrameElement.prototype, 'allow', { configurable: true, get() { return d.get.call(this); }, set(v) { d.set.call(this, add(v)); } });
     Element.prototype.setAttribute = function (n, v) { if (this instanceof HTMLIFrameElement && String(n).toLowerCase() === 'allow') v = add(v); return sa.call(this, n, v); };
-    const ce = Document.prototype.createElement;
-    Document.prototype.createElement = function (t, ...a) { const el = ce.call(this, t, ...a); if (String(t).toLowerCase() === 'iframe') sa.call(el, 'allow', ADD); return el; };
   });
   const overview = watchOverview(page);
   await signIn(page);
@@ -84,17 +82,35 @@ try {
   const at = await focusBySearch(page, String(target.data.title || target.data.cinemap.brief).slice(0, 30));
   if (!at) throw new Error('could not bring the set to the middle of the canvas');
   await page.mouse.move(at.x, at.y); await sleep(4000);
-  const t0 = Date.now();
-  const viaButton = await page.evaluate(({ x, y }) => { const bs = [...document.querySelectorAll('[data-testid="cinemap-world-enter"]')].map((e) => { const r = e.getBoundingClientRect(); return { e, d: Math.hypot(r.x + r.width / 2 - x, r.y + r.height / 2 - y), ok: r.width > 0 }; }).filter((b) => b.ok && b.d < 400).sort((a, b) => a.d - b.d); if (bs[0]) { bs[0].e.click(); return true; } return false; }, at);
-  if (!viaButton) await page.mouse.dblclick(at.x, at.y);
-  let state = null;
-  for (let i = 0; i < 180; i++) {
-    state = await page.evaluate(() => { const d = document.querySelector('[data-testid="cinemap-world-detail-dialog"]'); const c = d?.querySelector('[data-testid="cinemap-world-frame-cover"]'); return { dialog: !!d, iframe: !!d?.querySelector('iframe'), coverShown: c?.hasAttribute('data-shown') ?? null, failed: !!d?.querySelector('[data-testid="cinemap-world-preview-failed"]') }; });
-    if ((state.iframe && state.coverShown === false) || state.failed) break;
-    await sleep(500);
-  }
-  result.popup = { ...state, readySeconds: state.iframe && state.coverShown === false ? (Date.now() - t0) / 1000 : null };
+  // Errors of the page and its frames (cleaned: no ids, no queries), to tell why a viewer did not come up.
+  const errs = []; const onErr = (m) => { if (errs.length < 12) errs.push(clean(m).slice(0, 160)); };
+  page.on('pageerror', (e) => onErr(`pageerror ${e.message}`));
+  page.on('console', (m) => { if (m.type() === 'error') onErr(`console ${m.text()}`); });
+  const openPopup = async () => {
+    const t0 = Date.now();
+    const viaButton = await page.evaluate(({ x, y }) => { const bs = [...document.querySelectorAll('[data-testid="cinemap-world-enter"]')].map((e) => { const r = e.getBoundingClientRect(); return { e, d: Math.hypot(r.x + r.width / 2 - x, r.y + r.height / 2 - y), ok: r.width > 0 }; }).filter((b) => b.ok && b.d < 400).sort((a, b) => a.d - b.d); if (bs[0]) { bs[0].e.click(); return true; } return false; }, at);
+    if (!viaButton) await page.mouse.dblclick(at.x, at.y);
+    let state = null;
+    for (let i = 0; i < 240; i++) {
+      state = await page.evaluate(() => { const d = document.querySelector('[data-testid="cinemap-world-detail-dialog"]'); const c = d?.querySelector('[data-testid="cinemap-world-frame-cover"]'); return { dialog: !!d, iframe: !!d?.querySelector('iframe'), coverShown: c?.hasAttribute('data-shown') ?? null, failed: !!d?.querySelector('[data-testid="cinemap-world-preview-failed"]') }; });
+      if ((state.iframe && state.coverShown === false) || state.failed) break;
+      await sleep(500);
+    }
+    const frameAllow = await page.evaluate(() => document.querySelector('[data-testid="cinemap-world-frame"]')?.getAttribute('allow') ?? null).catch(() => null);
+    return { ...state, seconds: (Date.now() - t0) / 1000, readySeconds: state.iframe && state.coverShown === false ? (Date.now() - t0) / 1000 : null, frameAllow, errors: errs.splice(0) };
+  };
+  result.popup = await openPopup();
   log('popup', JSON.stringify(result.popup));
+  if (!result.popup.readySeconds) {
+    // Once more without the camera delegation, to tell whether it is what broke the viewer.
+    await shot(page, 'popup-failed');
+    await page.keyboard.press('Escape'); await sleep(1500); if (await page.locator('[data-testid="cinemap-world-detail-dialog"]').count()) { await page.mouse.click(10, 10); await page.keyboard.press('Escape'); await sleep(1500); }
+    await page.evaluate(() => { window.__allowCam = false; });
+    await page.mouse.move(at.x, at.y); await sleep(3000);
+    result.popupRetryNoCamera = await openPopup();
+    log('popup retry without camera delegation', JSON.stringify(result.popupRetryNoCamera));
+    result.popup.retried = true; if (result.popupRetryNoCamera.readySeconds) result.popup.readySeconds = result.popupRetryNoCamera.readySeconds;
+  }
   if (!result.popup.readySeconds) throw new Error('popup did not get ready');
 
   // The light viewer's frame and its biggest canvas.
