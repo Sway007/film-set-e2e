@@ -6,6 +6,7 @@
 //  - the job's states as the canvas reads them.
 // Prints only paths, timings and states (public repo); screenshots stay on this Mac.
 import { FE, BFF, launch, signIn, dismiss, sleep, log, result, save, shot, typeIntoEmptyCard } from './lib.mjs';
+import { startTrace } from './trace.mjs';
 
 const CANVAS = process.env.CANVAS_ID; if (!CANVAS) throw new Error('CANVAS_ID input is required');
 const SENTENCE = process.env.SENTENCE || 'A small harbour at dawn with two fishing boats and a wooden pier';
@@ -38,6 +39,7 @@ try {
     try { const d = await r.json(); const w = d?.data ?? d; const s = [w?.status, w?.progress?.stage ?? w?.stage, w?.failure_code ?? w?.error_code].filter(Boolean).join('/'); if (s && s !== last) { last = s; states.push({ ms: ms(), s }); } } catch {}
   });
   const marks = []; let prev = '';
+  const stopTrace = process.env.TRACE === '0' ? null : await startTrace(ctx, page);
   t0 = Date.now(); await page.keyboard.press('Enter'); log('sent');
   for (let i = 0; i < LIMIT_S; i++) {
     await sleep(1000);
@@ -49,13 +51,17 @@ try {
       }
       return { frame, live: false, text: '' };
     });
-    const k = `${m.frame ? 'frame' : '-'} | ${m.live ? 'LIVE' : '-'} | ${m.text}`;
+    let rs = '';
+    for (const f of page.frames()) { if (!/cinemap\.space/.test(f.url()) || /tapnow-pr-/.test(f.url())) continue; const d = await f.evaluate(() => { const x = document.documentElement.dataset; return x.cinemapRunnerState ? `${x.cinemapRunnerState}:${x.cinemapRunnerMessage || ''}` : ''; }).catch(() => ''); if (d) { rs = d; break; } }
+    const k = `${m.frame ? 'frame' : '-'} | ${m.live ? 'LIVE' : '-'} | runner ${rs.slice(0, 60)} | ${m.text}`;
     if (k !== prev) { prev = k; marks.push({ ms: ms(), k }); log('card', (ms() / 1000).toFixed(1), k); }
     if (m.live && !result.firstLiveMs) { result.firstLiveMs = ms(); await shot(page, 'first-live'); }
     if (result.firstLiveMs && ms() - result.firstLiveMs > 20000) break;
     if (/^(failed|cancelled)/.test(last)) break;
     if (i % 30 === 29) await shot(page, `w-${i}`);
   }
+  if (stopTrace) { const tr = await stopTrace(); result.trace = tr; log('trace', JSON.stringify({ events: tr.events, wallS: tr.wallS }));
+    for (const t of tr.threads) log(`thread ${t.process} busy ${t.busyMs}ms long ${t.longTasks}/${t.longMs}ms\n  per5s ${t.busyPer5s}\n  ` + t.top.join('\n  ')); }
   result.states = states; result.card = marks;
   result.requests = [...first.entries()].sort((a, b) => a[1] - b[1]).slice(0, 160).map(([k, t]) => `${(t / 1000).toFixed(1)}s x${counts.get(k)} ${k}`);
   log('waterfall\n' + result.requests.join('\n'));
