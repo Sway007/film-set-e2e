@@ -5,7 +5,7 @@
 //  2. Media on the canvas really loads: every video / image URL the canvas nodes point at is fetched (range GET) and its status
 //     counted per host. A clip delivered with the wrong File Hub host answered 404 while the card looked fine.
 // Prints only states, timings and host/status counts (public repo); screenshots stay on this Mac.
-import { FE, BFF, launch, signIn, dismiss, sleep, log, result, save, shot, watchOverview } from './lib.mjs';
+import { FE, BFF, launch, signIn, dismiss, sleep, log, result, save, shot, watchOverview, typeIntoEmptyCard } from './lib.mjs';
 
 const SENTENCE = process.env.SENTENCE || 'A quiet bus stop at dusk with one bench and a streetlight';
 const THROTTLE = Math.max(1, Math.min(20, Number(process.env.THROTTLE || 4)));
@@ -70,11 +70,8 @@ try {
 
   await page.getByRole('button', { name: 'Add node' }).click(); await sleep(1500);
   await page.getByTestId('add-node-3d-world').click(); await sleep(4000); await dismiss(page);
-  const box = page.locator('[data-testid="cinemap-world-empty-brief"]').last();
   await dismiss(page); await shot(page, 'before-type');
-  await box.scrollIntoViewIfNeeded({ timeout: 60000 }).catch(() => {});
-  await box.click({ timeout: 60000, force: true }).catch((e) => log('click', e.message.split('\n').slice(-2).join(' ').slice(0, 200)));
-  await box.fill(SENTENCE, { timeout: 60000, force: true });
+  await typeIntoEmptyCard(page, SENTENCE);
   await shot(page, 'added');
   const sent = at(); await page.keyboard.press('Enter'); log('sent'); result.sentence = SENTENCE;
 

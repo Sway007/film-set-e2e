@@ -115,3 +115,14 @@ export async function focusBySearch(page, text) {
   if (await input.count().catch(() => 0)) { await page.keyboard.press('Escape'); await sleep(800); }
   return page.evaluate(() => { const r = document.querySelector('.react-flow')?.getBoundingClientRect(); return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null; });
 }
+
+/** The empty film set card wears a cover ("Let Agent start" / "or describe the scene yourself", Ethan 11-23): a click on
+ * the field lands on the cover and hands the card to the Agent. Take the second way in first, then type. */
+export async function typeIntoEmptyCard(page, sentence) {
+  const card = page.locator('[data-testid="cinemap-world-empty"]').last();
+  await card.scrollIntoViewIfNeeded({ timeout: 60000 }).catch(() => {});
+  const own = card.getByText(/describe the scene yourself/i);
+  if (await own.count().catch(() => 0)) { await own.first().click({ timeout: 60000 }); await sleep(1500); log('cover: describe it myself'); }
+  const box = page.locator('[data-testid="cinemap-world-empty-brief"]').last();
+  await box.click({ timeout: 60000 }); await box.fill(sentence, { timeout: 60000 });
+}

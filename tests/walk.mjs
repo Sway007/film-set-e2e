@@ -72,6 +72,19 @@ try {
   const sentAt = at();
   await empty.getByText('Let Agent start').first().click({ timeout: 20000 });
   log('let agent start');
+  // With nothing on the canvas to go by, the Agent may ask what to build first (a question card with numbered answers).
+  const submit = page.getByRole('button', { name: /^Submit$/ });
+  for (let i = 0; i < 30 && !chat.asked; i++) {
+    await sleep(3000);
+    if (await submit.isVisible().catch(() => false)) {
+      chat.asked = at() - sentAt; await shot(page, 'agent-asks');
+      const panel = page.locator('div').filter({ has: submit }).filter({ hasText: /^[\s\S]*1[\s\S]*2/ }).last();
+      await panel.getByText(/^1$/).first().click({ timeout: 10000 }).catch((e) => log('pick', e.message.slice(0, 100)));
+      await sleep(800); await submit.click({ timeout: 10000 }); log('agent asked after', chat.asked, 's; picked answer 1');
+    }
+    if (/queued|running|building|claimed/i.test(last)) break;
+  }
+  result.agentAskedS = chat.asked ?? null;
 
   // 3. leave the tab in the background for a while once the job is under way
   let buddyAt = null, backgroundDone = false, end = null, cardText = '';

@@ -1,6 +1,6 @@
 // Builds a new Film set on the canvas, opens its popup while it builds (the viewer should follow the build), then checks the
 // finished card's turntable video: 1280×720, about 30 s per turn, file size.
-import { FE, BFF, launch, signIn, dismiss, sleep, log, result, save, shot } from './lib.mjs';
+import { FE, BFF, launch, signIn, dismiss, sleep, log, result, save, shot, typeIntoEmptyCard } from './lib.mjs';
 
 const CANVAS = process.env.CANVAS_ID; if (!CANVAS) throw new Error('CANVAS_ID input is required');
 const SENTENCE = process.env.SENTENCE || 'A quiet bus stop at dusk with one bench and a streetlight';
@@ -11,8 +11,7 @@ try {
   await sleep(25000); await dismiss(page);
   await page.getByRole('button', { name: 'Add node' }).click(); await sleep(1200);
   await page.getByTestId('add-node-3d-world').click(); await sleep(3000); await dismiss(page);
-  const box = page.locator('[data-testid="cinemap-world-empty-brief"]').last();
-  await box.scrollIntoViewIfNeeded(); await box.click(); await box.fill(SENTENCE);
+  await typeIntoEmptyCard(page, SENTENCE);
   const t0 = Date.now(); await page.keyboard.press('Enter'); log('sent', SENTENCE);
   result.sentence = SENTENCE;
   // While it builds: open its popup once building has started, and take a picture every 20 s for 2 minutes.
