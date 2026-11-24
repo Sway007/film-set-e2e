@@ -31,6 +31,10 @@ on:
         description: agent test, Agent PR preview environment name (agent_env)
         required: false
         default: ''
+      new_canvas:
+        description: selfcheck test, 1 = build on a new canvas made in canvas_id's team; empty = media check of canvas_id only
+        required: false
+        default: ''
       throttle:
         description: selfcheck test, CPU slow-down factor (1 = none)
         required: false
@@ -65,6 +69,7 @@ jobs:
           SENTENCE: ${{ inputs.sentence }}
           AGENT_ENV: ${{ inputs.agent_env }}
           THROTTLE: ${{ inputs.throttle }}
+          NEW_CANVAS: ${{ inputs.new_canvas }}
           T_USER: ${{ secrets.TAPNOW_USER }}
           T_PASS: ${{ secrets.TAPNOW_PASS }}
           # Screenshots and the screen recording stay on this Mac, in ~/.film-set-e2e/results/run-<n>-<test>-<browser>

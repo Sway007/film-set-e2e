@@ -47,18 +47,21 @@ try {
   // The runner frame's own log lines (claim / submit / fail) without any ids.
   page.on('console', (m) => { const t = m.text(); if (/runner|AGENT_UNAVAILABLE|did not open|park/i.test(t)) log('console', t.replace(/[0-9a-f]{8}-[0-9a-f-]{27}/gi, '<id>').slice(0, 200)); });
 
-  // With a canvas id: only the media check on that canvas (it already has a film set; one per canvas).
-  if (CANVAS) {
-    await page.goto(`https://${FE}/p/${CANVAS}?t=c&bff_env=${BFF}`, { waitUntil: 'domcontentloaded', timeout: 120000 });
-    await sleep(25000); await dismiss(page); await mediaCheck('media'); throw Object.assign(new Error('media only'), { done: true });
-  } else {
-    await page.goto(`https://${FE}/?bff_env=${BFF}`, { waitUntil: 'domcontentloaded', timeout: 120000 }); await sleep(8000); await dismiss(page);
-    const u0 = page.url();
-    const plus = page.getByText('Canvases', { exact: true }).locator('xpath=..').locator('button').first();
-    await plus.click({ timeout: 20000 });
-    for (let i = 0; i < 30 && page.url() === u0; i++) await sleep(1000);
-    result.newCanvas = page.url() !== u0; log('new canvas', result.newCanvas);
-  }
+  // NEW_CANVAS=1: open the given canvas (its team), then make a new canvas from the sidebar's Canvases "+".
+  // Otherwise, with a canvas id: only the media check on that canvas (it already has a film set; one per canvas).
+  if (!CANVAS) throw new Error('CANVAS_ID input is required');
+  await page.goto(`https://${FE}/p/${CANVAS}?t=c&bff_env=${BFF}`, { waitUntil: 'domcontentloaded', timeout: 120000 });
+  await sleep(15000);
+  const sw = page.getByRole('button', { name: /^Switch to / });
+  if (await sw.count().catch(() => 0)) { log('switching team'); await sw.first().click(); await sleep(20000); }
+  await dismiss(page);
+  if (process.env.NEW_CANVAS !== '1') { await sleep(10000); await mediaCheck('media'); throw Object.assign(new Error('media only'), { done: true }); }
+  const u0 = page.url();
+  const plus = page.getByText('Canvases', { exact: true }).locator('xpath=..').locator('button').first();
+  try { await plus.click({ timeout: 20000 }); } catch (e) { log('left bar', JSON.stringify(await page.evaluate(() => [...document.querySelectorAll('button,[role=button],a')].filter((b) => b.getBoundingClientRect().left < 300 && b.offsetParent).map((b) => (b.getAttribute('aria-label') || b.textContent || '').trim().slice(0, 24)).filter(Boolean).slice(0, 30)))); throw e; }
+  for (let i = 0; i < 30 && page.url() === u0; i++) await sleep(1000);
+  result.newCanvas = page.url() !== u0; log('new canvas', result.newCanvas);
+  if (!result.newCanvas) throw new Error('no new canvas');
   await sleep(20000); await dismiss(page);
 
   // Slow computer from here on (Chrome only): the film set's own runner frame is slowed too.
