@@ -28,6 +28,8 @@ try {
   await sleep(20000); await dismiss(page);
   await page.getByRole('button', { name: 'Add node' }).click(); await sleep(1500);
   await page.getByTestId('add-node-3d-world').click(); await sleep(4000); await dismiss(page);
+  const nodeId = await page.locator('[data-testid="cinemap-world-empty"]').last().evaluate((el) => el.closest('.react-flow__node')?.getAttribute('data-id') || '').catch(() => '');
+  log('watching the new card', !!nodeId);
   await typeIntoEmptyCard(page, SENTENCE);
 
   let t0 = 0; const ms = () => Date.now() - t0;
@@ -43,14 +45,14 @@ try {
   t0 = Date.now(); await page.keyboard.press('Enter'); log('sent');
   for (let i = 0; i < LIMIT_S; i++) {
     await sleep(1000);
-    const m = await page.evaluate(() => {
+    const m = await page.evaluate((id) => {
       const frame = !!document.querySelector('[data-testid="cinemap-runner-frame"]');
-      for (const n of document.querySelectorAll('.react-flow__node')) if (n.querySelector('[data-testid^="cinemap-world"]')) {
+      for (const n of document.querySelectorAll('.react-flow__node')) if ((id ? n.getAttribute('data-id') === id : true) && n.querySelector('[data-testid^="cinemap-world"]')) {
         const lf = n.querySelector('[data-testid="cinemap-world-live-frame"]'); const live = !!(lf && (lf.tagName === 'IMG' ? lf.naturalWidth : (lf.querySelector('img')?.naturalWidth || lf.querySelector('canvas'))));
         return { frame, live, text: n.textContent.replace(/\s+/g, ' ').slice(0, 70) };
       }
       return { frame, live: false, text: '' };
-    });
+    }, nodeId);
     let rs = '';
     for (const f of page.frames()) { if (!/cinemap\.space/.test(f.url()) || /tapnow-pr-/.test(f.url())) continue; const d = await f.evaluate(() => { const x = document.documentElement.dataset; return x.cinemapRunnerState ? `${x.cinemapRunnerState}:${x.cinemapRunnerMessage || ''}` : ''; }).catch(() => ''); if (d) { rs = d; break; } }
     const k = `${m.frame ? 'frame' : '-'} | ${m.live ? 'LIVE' : '-'} | runner ${rs.slice(0, 60)} | ${m.text}`;

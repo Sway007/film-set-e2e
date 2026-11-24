@@ -8,13 +8,15 @@ const KIND = { EvaluateScript: 'eval', 'v8.compile': 'compile', 'v8.compileModul
 
 export async function startTrace(ctx, page, t0ref) {
   const cdp = await ctx.newCDPSession(page);
-  const names = {}; const threads = {}; const S = { main: new Map(), events: 0 };
+  const names = {}; const threads = {}; const frames = {}; const S = { main: new Map(), events: 0 };
   const key = (e) => `${e.pid}:${e.tid}`;
   const mainOf = (e) => { let m = S.main.get(key(e)); if (!m) { m = { slices: new Map(), long: 0, longMs: 0, busy: 0, work: new Map() }; S.main.set(key(e), m); } return m; };
   cdp.on('Tracing.dataCollected', ({ value }) => {
     for (const e of value) {
       S.events++;
       if (S.base == null && e.ts) S.base = e.ts / 1000;
+      const fr = e.args?.data?.frames; if (Array.isArray(fr)) for (const f of fr) if (f.frame && f.url) frames[f.frame] = f.url;
+      if (e.name === 'FrameCommittedInBrowser' && e.args?.data?.frame && e.args.data.url) frames[e.args.data.frame] = e.args.data.url;
       if (e.ph === 'M') { if (e.name === 'process_name') names[e.pid] = e.args?.name; if (e.name === 'thread_name') threads[key(e)] = e.args?.name; continue; }
       if (e.ph !== 'X' || !e.dur) continue;
       const tn = threads[key(e)]; if (tn && tn !== 'CrRendererMain') continue;
@@ -27,7 +29,10 @@ export async function startTrace(ctx, page, t0ref) {
       const k = KIND[e.name]; if (!k || ms < 1) continue;
       const d = e.args?.data || {}; const where = norm(d.url || d.scriptName || d.stackTrace?.[0]?.url || '');
       const fn = k === 'call' || k === 'timer' || k === 'raf' || k === 'event' ? (d.functionName || d.type || '') : '';
-      const w = `${k} ${where}${fn ? ' ' + fn : ''}`.trim();
+      const pos = k === 'call' && d.lineNumber != null ? `:${d.lineNumber}:${d.columnNumber}` : '';
+      const fu = frames[d.frame]; let doc = '';
+      if (fu) { try { const x = new URL(fu); doc = `[${x.host.split('.')[0]}${x.pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27}/gi, ':id')}${[...x.searchParams.keys()].filter((q) => /runner|stage|embed|lite/.test(q)).map((q) => `?${q}=${x.searchParams.get(q)}`).join('')}] `; } catch {} }
+      const w = `${doc}${k} ${where}${pos}${fn ? ' ' + fn : ''}`.trim();
       const cur = m.work.get(w) || { ms: 0, n: 0, max: 0 }; cur.ms += ms; cur.n++; cur.max = Math.max(cur.max, ms); m.work.set(w, cur);
     }
   });
@@ -47,7 +52,7 @@ export async function startTrace(ctx, page, t0ref) {
       out.threads.push({
         process: String(names[pid] || pid), busyMs: Math.round(m.busy), longTasks: m.long, longMs: Math.round(m.longMs),
         busyPer5s: slices.map(([s, v]) => `${(s - s0) * 5}s:${Math.round(v)}`).join(' '),
-        top: [...m.work.entries()].sort((a, b) => b[1].ms - a[1].ms).slice(0, 25).map(([w, v]) => `${Math.round(v.ms)}ms n${v.n} max${Math.round(v.max)} ${w}`),
+        top: [...m.work.entries()].sort((a, b) => b[1].ms - a[1].ms).slice(0, 40).map(([w, v]) => `${Math.round(v.ms)}ms n${v.n} max${Math.round(v.max)} ${w}`),
       });
     }
     out.threads.sort((a, b) => b.busyMs - a.busyMs);
