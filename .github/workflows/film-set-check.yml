@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       test:
-        description: popup | build | agent | demo | buildclip | selfcheck | walk | windup | cloudsim | webrtc | vercel-login
+        description: popup | build | agent | demo | buildclip | selfcheck | walk | windup | cloudsim | webrtc | flicker | vercel-login
         required: true
         default: popup
       browser:
@@ -47,6 +47,14 @@ on:
         description: selfcheck test, CPU slow-down factor (1 = none)
         required: false
         default: '4'
+      fe_host:
+        description: FE host (default tapnow-pr-2178.cinemap.space)
+        required: false
+        default: ''
+      cycles:
+        description: flicker test, pick / click-away cycles
+        required: false
+        default: '6'
       sentence:
         description: build test, the sentence for the new set; agent test, what to say to the agent
         required: false
@@ -80,6 +88,8 @@ jobs:
           NEW_CANVAS: ${{ inputs.new_canvas }}
           MODE: ${{ inputs.mode }}
           OPEN_VIEW: ${{ inputs.open_view }}
+          FE_HOST: ${{ inputs.fe_host || 'tapnow-pr-2178.cinemap.space' }}
+          CYCLES: ${{ inputs.cycles }}
           T_USER: ${{ secrets.TAPNOW_USER }}
           T_PASS: ${{ secrets.TAPNOW_PASS }}
           # Screenshots and the screen recording stay on this Mac, in ~/.film-set-e2e/results/run-<n>-<test>-<browser>
