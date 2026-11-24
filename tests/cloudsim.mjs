@@ -36,6 +36,8 @@ function psTree(match) {
 }
 
 const { ctx, page } = await launch();
+// cloud mode: the canvas tab must not build at all — block its runner frame / window (CineMap /p/<id>?…runner=1…) outright
+if (MODE === 'cloud') await ctx.route((u) => u.hostname === CM && /\/p\//.test(u.pathname) && u.searchParams.get('runner') === '1', (r) => { result.blockedRunnerLoads = (result.blockedRunnerLoads || 0) + 1; return r.abort(); });
 const profileDir = path.join(os.homedir(), '.film-set-e2e', `profile-${process.env.BROWSER || 'chromium'}`);
 const canvasProcs = () => psTree((r) => r.cmd.includes(profileDir));
 let runnerBrowser = null; const runnerPid = { v: 0 };
