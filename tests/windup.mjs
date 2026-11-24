@@ -34,6 +34,9 @@ try {
 
   let t0 = 0; const ms = () => Date.now() - t0;
   const first = new Map(); const counts = new Map();
+  const slow = [];
+  ctx.on('requestfinished', (r) => { if (!t0) return; const tm = r.timing(); const start = tm.startTime - t0; const dur = tm.responseEnd > 0 ? tm.responseEnd : -1; if (start < 0 || start > 120000) return; if (dur >= 300 || /\/api\//.test(r.url())) slow.push({ start, dur, k: `${r.method()} ${norm(r.url())}` }); });
+  ctx.on('requestfailed', (r) => { if (!t0) return; slow.push({ start: Date.now() - t0, dur: -2, k: `FAILED ${r.method()} ${norm(r.url())} ${r.failure()?.errorText || ''}` }); });
   ctx.on('request', (r) => { if (!t0) return; const k = `${r.method()} ${norm(r.url())}`; counts.set(k, (counts.get(k) || 0) + 1); if (!first.has(k)) first.set(k, ms()); });
   const states = []; let last = '';
   page.on('response', async (r) => {
@@ -58,7 +61,7 @@ try {
     const k = `${m.frame ? 'frame' : '-'} | ${m.live ? 'LIVE' : '-'} | runner ${rs.slice(0, 60)} | ${m.text}`;
     if (k !== prev) { prev = k; marks.push({ ms: ms(), k }); log('card', (ms() / 1000).toFixed(1), k); }
     if (m.live && !result.firstLiveMs) { result.firstLiveMs = ms(); await shot(page, 'first-live'); }
-    if (result.firstLiveMs && ms() - result.firstLiveMs > 20000) break;
+    if (result.firstLiveMs && ms() - result.firstLiveMs > Number(process.env.AFTER_LIVE_MS || 60000)) break;
     if (/^(failed|cancelled)/.test(last)) break;
     if (i % 30 === 29) await shot(page, `w-${i}`);
   }
@@ -66,6 +69,8 @@ try {
     for (const t of tr.threads) log(`thread ${t.process} busy ${t.busyMs}ms long ${t.longTasks}/${t.longMs}ms\n  per5s ${t.busyPer5s}\n  ` + t.top.join('\n  ')); }
   result.states = states; result.card = marks;
   result.requests = [...first.entries()].sort((a, b) => a[1] - b[1]).slice(0, 160).map(([k, t]) => `${(t / 1000).toFixed(1)}s x${counts.get(k)} ${k}`);
+  result.slow = slow.sort((a, b) => a.start - b.start).map((x) => `${(x.start / 1000).toFixed(1)}s +${x.dur < 0 ? x.dur : (x.dur / 1000).toFixed(2) + 's'} ${x.k}`);
+  log('requests (api, or >= 0.3 s)\n' + result.slow.join('\n'));
   log('waterfall\n' + result.requests.join('\n'));
 } catch (e) { result.error = String(e?.message || e).replace(/[0-9a-f]{8}-[0-9a-f-]{27}/gi, '<id>').slice(0, 300); log('ERROR', result.error); await shot(page, 'error'); }
 finally { save(); await ctx.close(); }
