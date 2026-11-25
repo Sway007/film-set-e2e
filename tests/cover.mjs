@@ -13,6 +13,8 @@ const STAY_S = Number(process.env.CYCLES) > 0 ? Number(process.env.CYCLES) * 60 
 const { ctx, page } = await launch();
 const media = [], net = [];
 ctx.on('console', (m) => { const t = m.text(); if (/\[node media\]|\[runner-live\]|turntable/i.test(t)) { media.push(t.slice(0, 400)); log('CON', t.slice(0, 400)); } });
+const clipNet = [];
+ctx.on('response', (r) => { const u = new URL(r.url()); if (/\/api\/tapnow\/clips/.test(u.pathname) || /[?&]render=clips/.test(u.search)) { const e = `${r.request().method()} ${u.pathname.replace(/[0-9a-f-]{36}/g, ':id')}${/render=clips/.test(u.search) ? '?render=clips' : ''} ${r.status()}`; clipNet.push(e); log('CLIP', e); } });
 ctx.on('response', (r) => { const m = /\/api\/jobs\/[^/]+\/(poster|turntable_video|render_res|clips)$/.exec(new URL(r.url()).pathname); if (m && r.request().method() === 'POST') { net.push(`${m[1]} ${r.status()}`); log('NET', m[1], r.status()); } });
 try {
   await signIn(page);
@@ -55,13 +57,16 @@ try {
     if (v && videoAt == null) {
       videoAt = at(); result.video = { w: v.w, h: v.h, seconds: v.seconds, paused: v.paused };
       result.video.bytes = await page.evaluate((u) => fetch(u, { method: 'HEAD' }).then((r) => Number(r.headers.get('content-length')) || null).catch(() => null), v.src);
-      log('card plays the video', JSON.stringify(result.video), 'at', videoAt); await sleep(8000); await shot(page, 'video-a'); await sleep(12000); await shot(page, 'video-b'); break;
+      log('card plays the video', JSON.stringify(result.video), 'at', videoAt); await sleep(8000); await shot(page, 'video-a'); await sleep(12000); await shot(page, 'video-b');
     }
+    const clipVid = c.vids.find((x) => !x.tv && x.w > 0 && /clip|deliver|\.mp4/.test(x.src));
+    if (clipVid && result.clipVideoAtS == null) { result.clipVideoAtS = at(); result.clipVideo = { w: clipVid.w, h: clipVid.h, seconds: clipVid.seconds }; log('shot card plays its clip', JSON.stringify(result.clipVideo)); await shot(page, 'clip'); }
+    if (videoAt != null && (result.clipVideoAtS != null || !/Waiting to render|Rendering|出片/i.test(c.text))) break;
     if (i % 6 === 0) log('card', JSON.stringify({ frames: c.frames, vids: c.vids.map(({ src, ...r }) => r), text: c.text.slice(0, 120) }));
     if (/failed|失败/i.test(c.text) && liveAt == null && at() > 120) { result.failed = c.text.slice(0, 120); break; }
     if (readyAt != null && at() - readyAt > STAY_S) break;
   }
-  result.liveAtS = liveAt; result.mediaStartAtS = readyAt; result.videoAtS = videoAt; result.media = media; result.net = net;
+  result.liveAtS = liveAt; result.mediaStartAtS = readyAt; result.videoAtS = videoAt; result.media = media; result.net = net; result.clipNet = clipNet; result.lastText = last?.text?.slice(0, 240);
   result.lastCard = last && { frames: last.frames, vids: last.vids.map(({ src, ...r }) => r) };
   await shot(page, 'end');
 } catch (e) { result.error = String(e?.message || e); result.media = media; result.net = net; log('ERROR', result.error); await shot(page, 'error'); }
