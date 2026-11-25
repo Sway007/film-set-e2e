@@ -20,12 +20,18 @@ export function save() {
 
 /** Opens the browser: Chrome with the Mac's GPU (or WebKit, Safari's engine), headed so the GPU is really used. */
 export async function launch(browserName = process.env.BROWSER || 'chromium', { args = [] } = {}) {
-  const dir = path.join(os.homedir(), '.film-set-e2e', `profile-${browserName}`);
+  const channel = browserName === 'chromium' ? process.env.CHROME_CHANNEL || '' : '';
+  // an installed Chrome gets its own profile (it would upgrade Playwright Chromium's profile, which then refuses to open), seeded with
+  // the Chromium profile's cookies: the Vercel sign-in of the CineMap preview and the TapNow session live there
+  const dir = path.join(os.homedir(), '.film-set-e2e', channel ? `profile-${channel}` : `profile-${browserName}`);
+  let seed = [];
+  if (channel) { try { const c0 = await chromium.launchPersistentContext(path.join(os.homedir(), '.film-set-e2e', 'profile-chromium'), { headless: true }); seed = await c0.cookies(); await c0.close(); } catch (e) { console.log('cookie seed failed', String(e?.message || e).slice(0, 200)); } }
   const headless = process.env.HEADLESS === '1';
   const opts = { viewport: { width: 1600, height: 1000 }, headless, recordVideo: { dir: OUT, size: { width: 1600, height: 1000 } } };
   const ctx = browserName === 'webkit'
     ? await webkit.launchPersistentContext(dir, opts)
-    : await chromium.launchPersistentContext(dir, { ...opts, channel: process.env.CHROME_CHANNEL || undefined, args: ['--enable-gpu-rasterization', '--ignore-gpu-blocklist', ...args] });
+    : await chromium.launchPersistentContext(dir, { ...opts, channel: channel || undefined, args: ['--enable-gpu-rasterization', '--ignore-gpu-blocklist', ...args] });
+  if (seed.length) { await ctx.addCookies(seed.map(({ sameSite, ...c }) => ({ ...c, sameSite: sameSite || 'Lax' }))).catch((e) => console.log('cookie add failed', String(e?.message || e).slice(0, 200))); console.log('seeded cookies', seed.length); }
   const page = ctx.pages()[0] || (await ctx.newPage());
   result.browser = browserName; result.userAgent = await page.evaluate(() => navigator.userAgent);
   return { ctx, page };
