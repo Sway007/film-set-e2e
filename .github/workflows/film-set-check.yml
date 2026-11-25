@@ -105,7 +105,8 @@ jobs:
           # Screenshots and the screen recording stay on this Mac, in ~/.film-set-e2e/results/run-<n>-<test>-<browser>
           # (public repo: nothing of the canvas is uploaded); the log prints only the numbers (result.json).
           RUN_TAG: run-${{ github.run_number }}-${{ inputs.test }}-${{ inputs.browser }}
-        run: node tests/${{ inputs.test }}.mjs
+        # caffeinate keeps the Mac's display awake: a sleeping display makes the canvas tab hidden, and hidden tabs stop rendering clips
+        run: caffeinate -dis node tests/${{ inputs.test }}.mjs
       # demo only: the highlight video leaves this Mac encrypted (a one-time key passed as a masked input), kept one day
       - name: Encrypt highlight video
         if: ${{ always() && inputs.test == 'demo' && inputs.video_key != '' }}

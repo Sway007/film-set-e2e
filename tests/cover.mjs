@@ -112,6 +112,15 @@ try {
     if (videoAt != null && claims > 0 && Date.now() - lastClipAt > 120000) {
       result.claims = claims;
       const boxes = await page.evaluate(() => [...document.querySelectorAll('.react-flow__node')].filter((x) => !/Step inside/.test(x.textContent)).map((n) => { const r = n.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, html: n.innerHTML.length }; })).catch(() => []);
+      // the node's own data, read from React's props: a delivered clip has data.src (a TapNow file) and no cinemap.pending / cinemap.clip
+      result.shotData = await page.evaluate(() => [...document.querySelectorAll('.react-flow__node')].map((el) => {
+        const k = Object.keys(el).find((x) => x.startsWith('__reactFiber$')); let f = k ? el[k] : null; let d = null;
+        for (let i = 0; f && i < 25 && !d; i++, f = f.return) { const p = f.memoizedProps; d = p?.data && typeof p.data === 'object' ? p.data : p?.node?.data ?? null; }
+        if (!d) return { id: el.dataset.id, data: null };
+        const cm = d.cinemap || {}; let host = ''; try { host = d.src ? new URL(d.src).host : ''; } catch { host = 'bad'; }
+        return { id: (el.dataset.id || '').slice(0, 8), type: el.dataset.type || '', role: cm.role ?? null, src: host, w: d.width ?? d.videoWidth ?? null, h: d.height ?? d.videoHeight ?? null, pending: cm.pending ?? null, clip: cm.clip ? (cm.clip.state || 'set') : null, state: cm.state ?? null, title: String(d.title || '').slice(0, 40) };
+      })).catch((e) => String(e));
+      log('SHOT data', JSON.stringify(result.shotData));
       result.shots = [];
       for (const [k, b] of boxes.entries()) {
         await page.mouse.click(b.x, b.y); await sleep(4000);
