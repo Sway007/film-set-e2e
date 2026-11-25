@@ -50,7 +50,7 @@ ctx.on('request', (q) => { if (!probedNode && /[?&]tv=/.test(q.url())) { probedN
 try {
   await signIn(page);
   // the CineMap preview is behind Vercel Authentication: one top-level visit puts its cookie in this profile (the card's frame needs it)
-  const cm = await ctx.newPage(); await cm.goto(`https://${CM}/`, { waitUntil: 'domcontentloaded', timeout: 120000 }).catch(() => {}); await sleep(6000);
+  const cm = await ctx.newPage(); await cm.goto(`https://${CM}/${process.env.CM_SHARE ? `?_vercel_share=${process.env.CM_SHARE}` : ''}`, { waitUntil: 'domcontentloaded', timeout: 120000 }).catch(() => {}); await sleep(6000);
   result.cinemapHost = new URL(cm.url()).host; log('cinemap host after visit', result.cinemapHost); await cm.close();
   if (!CANVAS) throw new Error('CANVAS_ID input is required');
   const q = `t=c&bff_env=${BFF}&agent_env=${AGENT}&agent_team=project`;
