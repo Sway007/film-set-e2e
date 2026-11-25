@@ -20,6 +20,73 @@ ctx.on('console', (m) => { if (m.type() === 'error' || /video|media|cover/i.test
 ctx.on('request', (q) => { const u = q.url(); if (/[?&]tv=/.test(u)) { videoReq.push(`${q.resourceType()} ${(q.headers().range || '').slice(0, 30)}`); if (videoReq.length <= 3) { log('VIDEO REQ', q.resourceType(), q.headers().range || ''); for (const d of [300, 1500, 4000, 10000]) setTimeout(() => page.evaluate(() => ({ videos: [...document.querySelectorAll('video')].map((v) => ({ tv: /[?&]tv=/.test(v.currentSrc || v.src || ''), ready: v.readyState, net: v.networkState, err: v.error?.code ?? null, paused: v.paused, w: v.videoWidth, inDoc: v.isConnected })), nodes: document.querySelectorAll('.react-flow__node').length, nodeHtml: [...document.querySelectorAll('.react-flow__node')].map((n) => n.innerHTML.length), iframes: [...document.querySelectorAll('iframe')].map((f) => (f.src.match(/render=clips|ui=watch|embed=node/) || ['?'])[0]), canvases: [...document.querySelectorAll('canvas')].map((c) => `${c.width}x${c.height}${c.getAttribute('data-webgpu') != null ? ':gpu' : ''}`).slice(0, 6), gpuAttr: [...document.querySelectorAll('[data-webgpu-plane],[data-render-mode],[data-canvas-renderer]')].map((e) => e.getAttribute('data-render-mode') || e.getAttribute('data-canvas-renderer') || 'plane').slice(0, 4), renderer: { ...(document.querySelector('[data-canvas-renderer]')?.dataset || {}) }, gpuHost: !!document.querySelector('[data-webgpu-host]'), shotHtml: [...document.querySelectorAll('.react-flow__node')].filter((n) => !/Step inside/.test(n.textContent)).map((n) => n.innerHTML.length) })).then((v) => log('VIDEOS after', d, 'ms', JSON.stringify(v))).catch(() => {}), d); } } });
 ctx.on('response', (r) => { const u = new URL(r.url()); if (/\/api\/tapnow\/clips/.test(u.pathname) || /[?&]render=clips/.test(u.search)) { const e = `${r.request().method()} ${u.pathname.replace(/[0-9a-f-]{36}/g, ':id')}${/render=clips/.test(u.search) ? '?render=clips' : ''} ${r.status()}`; clipNet.push(e); lastClipAt = Date.now(); log('CLIP', e); } });
 ctx.on('response', (r) => { const m = /\/api\/jobs\/[^/]+\/(poster|turntable_video|render_res|clips)$/.exec(new URL(r.url()).pathname); if (m && r.request().method() === 'POST') { net.push(`${m[1]} ${r.status()}`); log('NET', m[1], r.status()); } });
+// ---- delivery evidence (CM-810 / CM-1025). Runner facts (clip-render-runner.js + clip-render.mjs + delivery.mjs):
+// a clip is delivered by the CineMap delivery API (POST /api/tapnow/delivery, …/prepare, …/artifacts/<a>/parts|complete, …/commit) from the
+// render frame; the commit PATCHes the pending shot card (src filled, cinemap.pending / cinemap.clip dropped) and marks the clip row done. A beat
+// after that answers 409 CLIP_LEASE_LOST (the row is no longer `rendering`); the runner then aborts quietly (no console line) and reports 'let',
+// not 'done'. 409 CLIP_BUSY is a lock race (the runner logs `[clip-render] beat CLIP_BUSY …`). So: log each 409's code and each commit's outcome.
+const delivNet = [], clipMsgs = []; let jobId = null, canvasAuth = null;
+const shortPath = (p) => p.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, ':id');
+const bodyCode = async (r) => { try { const j = await r.json(); return String(j?.code ?? j?.data?.code ?? '').slice(0, 40); } catch { return ''; } };
+ctx.on('response', async (r) => {
+  let u; try { u = new URL(r.url()); } catch { return; }
+  const q = r.request(), m = q.method();
+  // the job id (for GET /api/jobs/<job>/clips): from any job call the page makes
+  const j = /\/api\/jobs\/([0-9a-f-]{36})\//i.exec(u.pathname); if (j && !jobId) { jobId = j[1].toLowerCase(); log('job id seen'); }
+  if (/\/api\/tapnow\/clips\/[^/]+\/(beat|claim|fail)$/.test(u.pathname) && r.status() >= 400) { const c = await bodyCode(r); log('CLIP ERR', m, shortPath(u.pathname), r.status(), c); clipNet.push(`${m} ${shortPath(u.pathname)} ${r.status()} ${c}`); if (/beat$/.test(u.pathname)) setTimeout(() => shotState(`after beat ${r.status()} ${c}`).catch(() => {}), 4000); }
+  if (/\/api\/tapnow\/delivery(\/|$)/.test(u.pathname) && m !== 'GET' || /\/api\/tapnow\/delivery\/[^/]+$/.test(u.pathname)) {
+    let e = `${m} ${shortPath(u.pathname)} ${r.status()}`;
+    if (/\/commit$/.test(u.pathname) || r.status() >= 400) {
+      try {
+        const j = await r.json(), d = j?.data ?? j;
+        if (r.status() >= 400) e += ` ${String(j?.code ?? '').slice(0, 40)}`;
+        else e += ` ${JSON.stringify({ status: d?.status ?? null, resumable: d?.resumable ?? null, reason: d?.resume_reason ?? null, fill: !!d?.fill_node_id, board: d?.board?.status ?? null, artifacts: (d?.artifacts ?? []).map((a) => `${a.kind}:${a.status}${a.error?.code ? `:${a.error.code}` : ''}`) })}`;
+      } catch { /* no JSON body */ }
+    }
+    delivNet.push(e); log('DELIVERY', e);
+  }
+});
+// the canvas side: the render frame's {type:'cinemap-clip-render', state, render_id} messages to the TapNow page (state changes only)
+await ctx.addInitScript(() => {
+  if (window.top !== window) return; const last = {};
+  window.addEventListener('message', (e) => { const d = e.data; if (!d || d.type !== 'cinemap-clip-render') return; const id = String(d.render_id || '').slice(0, 8), k = `${d.state}${d.reason ? `/${d.reason}` : ''}`; if (last[id] === k) return; last[id] = k; console.log('[clip-msg]', id, k, d.pct ?? ''); });
+});
+ctx.on('console', (m) => { const t = m.text(); if (/^\[clip-msg\]|^\[library\]/.test(t)) { clipMsgs.push(t.slice(0, 200)); log('CON', t.slice(0, 300)); } });
+// the TapNow BFF's canvas calls carry a Bearer token and org headers (endpoints/libs/alova.ts): keep the latest set in memory to read the canvas's
+// nodes the same way the FE does (GET /api/canvas/v1/canvases/<id>/nodes). Never logged.
+ctx.on('request', (q) => {
+  if (!/\/api\/canvas\/v[12]\/canvases\//.test(q.url())) return; const h = q.headers(); if (!h.authorization) return;
+  const keep = {}; for (const [k, v] of Object.entries(h)) if (k === 'authorization' || k.startsWith('x-')) keep[k] = v;
+  canvasAuth = { origin: new URL(q.url()).origin, headers: keep };
+});
+const hostOf = (s) => { if (!s) return ''; try { return new URL(String(s)).host; } catch { return 'not-a-url'; } };
+const canvasIdOf = () => { const m = /\/p\/([^/?#]+)/.exec(page.url()); return m ? m[1] : null; };
+/** The canvas's nodes, read from the BFF with the FE's own auth → per video / shot card: src host, size, cinemap.pending / clip / role. */
+async function canvasShots() {
+  const cid = canvasIdOf(); if (!cid) return { err: 'no canvas id in the page URL' }; if (!canvasAuth) return { err: 'no canvas call seen yet (no auth to reuse)' };
+  const r = await ctx.request.get(`${canvasAuth.origin}/api/canvas/v1/canvases/${encodeURIComponent(cid)}/nodes?limit=100`, { headers: canvasAuth.headers, timeout: 30000 }).catch((e) => ({ err: String(e?.message || e).slice(0, 120) }));
+  if (r.err) return { err: r.err }; if (!r.ok()) return { err: `HTTP ${r.status()} ${await bodyCode(r)}` };
+  let j; try { j = await r.json(); } catch { return { err: 'not JSON' }; }
+  const nodes = j?.data?.nodes ?? j?.nodes ?? [];
+  return { n: nodes.length, shots: nodes.filter((n) => n.type === 'video' || n.data?.cinemap?.role === 'shot').map((n) => { const d = n.data || {}, cm = d.cinemap || {}; return {
+    id: String(n.id || '').slice(0, 14), type: n.type, role: cm.role ?? null, title: String(d.title || '').slice(0, 30), src: hostOf(d.src), srcPath: d.src ? /\/uploads\/|\/files\//.test(String(d.src)) : false,
+    w: d.width ?? d.videoWidth ?? d.meta?.width ?? null, h: d.height ?? d.videoHeight ?? d.meta?.height ?? null, dur: d.duration ?? d.meta?.duration ?? null,
+    pending: cm.pending ?? null, clip: cm.clip ? (cm.clip.state || 'set') : null, render_id: !!cm.render_id, delivery: !!cm.delivery_id, cover: hostOf(d.cover ?? d.poster ?? d.thumbnail) }; }) };
+}
+/** CineMap's own view of the clip rows: GET /api/jobs/<job>/clips (the person's session; read from a CineMap frame, else with this profile's cookies). */
+async function jobClips() {
+  if (!jobId) return { err: 'no job id seen' };
+  const path = `/api/jobs/${jobId}/clips`, pick = (j) => (j?.clips ?? []).map((c) => ({ name: String(c.name || '').slice(0, 24), state: c.state, pct: c.pct ?? null, code: c.code ?? null, attempts: c.attempts ?? 0, delivered: !!c.delivery_id, node: String(c.node_id || '').slice(0, 14) }));
+  const fr = page.frames().find((f) => { try { return new URL(f.url()).host === CM; } catch { return false; } });
+  if (fr) { const j = await fr.evaluate((p) => fetch(p, { credentials: 'same-origin', headers: { accept: 'application/json' } }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) })), path).catch(() => null); if (j?.status === 200) return { via: 'frame', clips: pick(j.body) }; if (j) return { via: 'frame', err: `HTTP ${j.status} ${String(j.body?.code ?? '')}` }; }
+  const r = await ctx.request.get(`https://${CM}${path}`, { timeout: 30000 }).catch(() => null);
+  if (!r) return { via: 'cookies', err: 'request failed' }; if (!r.ok()) return { via: 'cookies', err: `HTTP ${r.status()} ${await bodyCode(r)}` };
+  return { via: 'cookies', clips: pick(await r.json().catch(() => null)) };
+}
+async function shotState(tag) {
+  const [nodes, rows] = await Promise.all([canvasShots().catch((e) => ({ err: String(e?.message || e).slice(0, 120) })), jobClips().catch((e) => ({ err: String(e?.message || e).slice(0, 120) }))]);
+  log('SHOT data', tag, JSON.stringify({ nodes, rows })); return { tag, nodes, rows };
+}
 // a <video> that fails says why (capture phase: media errors do not bubble)
 await ctx.addInitScript(() => { document.addEventListener('error', (e) => { const v = e.target; if (v && v.tagName === 'VIDEO') console.log('[vid-err]', JSON.stringify({ code: v.error?.code ?? null, message: v.error?.message ?? '', tv: /[?&]tv=/.test(v.currentSrc || v.src || ''), ready: v.readyState, net: v.networkState })); }, true); });
 // the uploaded file itself: its avcC (profile, level), whether this browser says it can play it, and a fresh off-canvas <video>'s verdict
@@ -112,17 +179,8 @@ try {
     if (videoAt != null && claims > 0 && Date.now() - lastClipAt > 120000) {
       result.claims = claims;
       const boxes = await page.evaluate(() => [...document.querySelectorAll('.react-flow__node')].filter((x) => !/Step inside/.test(x.textContent)).map((n) => { const r = n.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, html: n.innerHTML.length }; })).catch(() => []);
-      // the node's own data, read from React's props: a delivered clip has data.src (a TapNow file) and no cinemap.pending / cinemap.clip
-      result.shotData = await page.evaluate(() => [...document.querySelectorAll('.react-flow__node')].map((el) => {
-        const holder = [el, ...el.querySelectorAll('*')].find((x) => Object.keys(x).some((k) => k.startsWith('__reactFiber$')));
-        const k = holder && Object.keys(holder).find((x) => x.startsWith('__reactFiber$')); let f = k ? holder[k] : null; let d = null; let depth = 0;
-        const pick = (p) => { if (!p || typeof p !== 'object') return null; for (const c of [p.data, p.node?.data, p.nodeData, p.props?.data]) if (c && typeof c === 'object' && ('cinemap' in c || 'src' in c || 'title' in c)) return c; return null; };
-        for (; f && depth < 80 && !d; depth++, f = f.return) d = pick(f.memoizedProps);
-        if (!d) return { id: (el.dataset.id || '').slice(0, 20), data: null, fiber: !!k, depth };
-        const cm = d.cinemap || {}; let host = ''; try { host = d.src ? new URL(d.src).host : ''; } catch { host = 'bad'; }
-        return { id: (el.dataset.id || '').slice(0, 8), type: el.dataset.type || '', role: cm.role ?? null, src: host, w: d.width ?? d.videoWidth ?? null, h: d.height ?? d.videoHeight ?? null, pending: cm.pending ?? null, clip: cm.clip ? (cm.clip.state || 'set') : null, state: cm.state ?? null, title: String(d.title || '').slice(0, 40) };
-      })).catch((e) => String(e));
-      log('SHOT data', JSON.stringify(result.shotData));
+      // each shot card's stored data (the BFF's node list, read with the FE's own auth) and CineMap's clip rows (GET /api/jobs/<job>/clips)
+      result.shotData = await shotState('queue quiet');
       result.shots = [];
       for (const [k, b] of boxes.entries()) {
         await page.mouse.click(b.x, b.y); await sleep(4000);
@@ -139,8 +197,9 @@ try {
     if (readyAt != null && at() - readyAt > STAY_S) break;
   }
   result.liveAtS = liveAt; result.mediaStartAtS = readyAt; result.videoAtS = videoAt; result.videoRequests = videoReq.length; result.videoReqKinds = [...new Set(videoReq)].slice(0, 5);
-  result.media = media; result.net = net; result.clipNet = clipNet; result.lastText = last?.text?.slice(0, 240);
+  result.media = media; result.net = net; result.clipNet = clipNet; result.delivNet = delivNet; result.clipMsgs = clipMsgs; result.lastText = last?.text?.slice(0, 240);
   result.lastCard = last && { frames: last.frames, vids: last.vids.map(({ src, ...r }) => r) };
+  if (!result.shotData) result.shotData = await shotState('end').catch((e) => String(e?.message || e));
   await shot(page, 'end');
 } catch (e) { result.error = String(e?.message || e); result.media = media; result.net = net; log('ERROR', result.error); await shot(page, 'error'); }
 finally { save(); console.log('RESULT ' + JSON.stringify(result)); await ctx.close(); }
