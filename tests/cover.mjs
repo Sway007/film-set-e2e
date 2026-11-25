@@ -13,12 +13,12 @@ const STAY_S = Number(process.env.CYCLES) > 0 ? Number(process.env.CYCLES) * 60 
 const { ctx, page } = await launch();
 const media = [], net = [];
 ctx.on('console', (m) => { const t = m.text(); if (/\[node media\]|\[runner-live\]|\[clip-render\]|\[clip|closing|no HTTP answer|turntable|falling back to React Flow|webgpu/i.test(t)) { media.push(t.slice(0, 400)); log('CON', t.slice(0, 400)); } });
-const clipNet = [], videoReq = [];
+const clipNet = [], videoReq = []; let lastClipAt = 0;
 ctx.on('response', async (r) => { const u = r.url(); if (/[?&]tv=/.test(u)) { const h = r.headers(); log('VIDEO RES', r.status(), h['content-type'] || '', h['content-range'] || h['content-length'] || ''); } });
 ctx.on('requestfailed', (q) => { if (/[?&]tv=/.test(q.url())) log('VIDEO FAILED', q.failure()?.errorText || ''); });
 ctx.on('console', (m) => { if (m.type() === 'error' || /video|media|cover/i.test(m.text())) { const t = m.text(); if (!/favicon|sso-api/.test(t)) log('CONERR', m.type(), t.slice(0, 260)); } });
 ctx.on('request', (q) => { const u = q.url(); if (/[?&]tv=/.test(u)) { videoReq.push(`${q.resourceType()} ${(q.headers().range || '').slice(0, 30)}`); if (videoReq.length <= 3) { log('VIDEO REQ', q.resourceType(), q.headers().range || ''); for (const d of [300, 1500, 4000, 10000]) setTimeout(() => page.evaluate(() => ({ videos: [...document.querySelectorAll('video')].map((v) => ({ tv: /[?&]tv=/.test(v.currentSrc || v.src || ''), ready: v.readyState, net: v.networkState, err: v.error?.code ?? null, paused: v.paused, w: v.videoWidth, inDoc: v.isConnected })), nodes: document.querySelectorAll('.react-flow__node').length, nodeHtml: [...document.querySelectorAll('.react-flow__node')].map((n) => n.innerHTML.length), iframes: [...document.querySelectorAll('iframe')].map((f) => (f.src.match(/render=clips|ui=watch|embed=node/) || ['?'])[0]), canvases: [...document.querySelectorAll('canvas')].map((c) => `${c.width}x${c.height}${c.getAttribute('data-webgpu') != null ? ':gpu' : ''}`).slice(0, 6), gpuAttr: [...document.querySelectorAll('[data-webgpu-plane],[data-render-mode],[data-canvas-renderer]')].map((e) => e.getAttribute('data-render-mode') || e.getAttribute('data-canvas-renderer') || 'plane').slice(0, 4), renderer: { ...(document.querySelector('[data-canvas-renderer]')?.dataset || {}) }, gpuHost: !!document.querySelector('[data-webgpu-host]'), shotHtml: [...document.querySelectorAll('.react-flow__node')].filter((n) => !/Step inside/.test(n.textContent)).map((n) => n.innerHTML.length) })).then((v) => log('VIDEOS after', d, 'ms', JSON.stringify(v))).catch(() => {}), d); } } });
-ctx.on('response', (r) => { const u = new URL(r.url()); if (/\/api\/tapnow\/clips/.test(u.pathname) || /[?&]render=clips/.test(u.search)) { const e = `${r.request().method()} ${u.pathname.replace(/[0-9a-f-]{36}/g, ':id')}${/render=clips/.test(u.search) ? '?render=clips' : ''} ${r.status()}`; clipNet.push(e); log('CLIP', e); } });
+ctx.on('response', (r) => { const u = new URL(r.url()); if (/\/api\/tapnow\/clips/.test(u.pathname) || /[?&]render=clips/.test(u.search)) { const e = `${r.request().method()} ${u.pathname.replace(/[0-9a-f-]{36}/g, ':id')}${/render=clips/.test(u.search) ? '?render=clips' : ''} ${r.status()}`; clipNet.push(e); lastClipAt = Date.now(); log('CLIP', e); } });
 ctx.on('response', (r) => { const m = /\/api\/jobs\/[^/]+\/(poster|turntable_video|render_res|clips)$/.exec(new URL(r.url()).pathname); if (m && r.request().method() === 'POST') { net.push(`${m[1]} ${r.status()}`); log('NET', m[1], r.status()); } });
 // a <video> that fails says why (capture phase: media errors do not bubble)
 await ctx.addInitScript(() => { document.addEventListener('error', (e) => { const v = e.target; if (v && v.tagName === 'VIDEO') console.log('[vid-err]', JSON.stringify({ code: v.error?.code ?? null, message: v.error?.message ?? '', tv: /[?&]tv=/.test(v.currentSrc || v.src || ''), ready: v.readyState, net: v.networkState })); }, true); });
@@ -107,7 +107,21 @@ try {
       const sb = await page.evaluate(() => { const n = [...document.querySelectorAll('.react-flow__node')].find((x) => !/Step inside/.test(x.textContent)); const r = n?.getBoundingClientRect(); return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height } : null; }).catch(() => null);
       if (sb) { await page.mouse.move(sb.x, sb.y); await sleep(4000); const hv = await page.evaluate(() => [...document.querySelectorAll('video')].map((v) => ({ tv: /[?&]tv=/.test(v.currentSrc || v.src || ''), w: v.videoWidth, h: v.videoHeight, d: Math.round(v.duration || 0), paused: v.paused, err: v.error?.code ?? null }))).catch(() => null); result.shotHover = { at: at(), box: { w: Math.round(sb.w), h: Math.round(sb.h) }, videos: hv }; log('SHOT hover', JSON.stringify(result.shotHover)); await shot(page, 'shot-hover'); await page.mouse.move(5, 5); }
     }
-    if (videoAt != null && (result.clipVideoAtS != null || !/Waiting to render|Rendering|出片/i.test(c.text))) break;
+    // in WebGPU the shot cards are GPU-painted (no DOM text), so wait for the clip queue to go quiet: claims seen, nothing for 120 s
+    const claims = clipNet.filter((x) => /claim/.test(x)).length;
+    if (videoAt != null && claims > 0 && Date.now() - lastClipAt > 120000) {
+      result.claims = claims;
+      const boxes = await page.evaluate(() => [...document.querySelectorAll('.react-flow__node')].filter((x) => !/Step inside/.test(x.textContent)).map((n) => { const r = n.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, html: n.innerHTML.length }; })).catch(() => []);
+      result.shots = [];
+      for (const [k, b] of boxes.entries()) {
+        await page.mouse.click(b.x, b.y); await sleep(4000);
+        const v = await page.evaluate(() => [...document.querySelectorAll('video')].filter((x) => !/[?&]tv=/.test(x.currentSrc || x.src || '')).map((x) => ({ w: x.videoWidth, h: x.videoHeight, d: Math.round(x.duration || 0), paused: x.paused, err: x.error?.code ?? null, host: (() => { try { return new URL(x.currentSrc || x.src).host; } catch { return ''; } })() }))).catch(() => null);
+        result.shots.push({ k, html: b.html, videos: v }); log('SHOT selected', k, JSON.stringify({ html: b.html, videos: v })); await shot(page, `shot-${k}`);
+        await page.mouse.click(5, 300); await sleep(800);
+      }
+      break;
+    }
+    if (videoAt != null && claims === 0 && at() - (readyAt ?? at()) > 240) break;
     if (i % 6 === 0) log('renderer', JSON.stringify(await page.evaluate(() => ({ ...(document.querySelector('[data-canvas-renderer]')?.dataset || {}) })).catch(() => null)));
     if (i % 6 === 0) log('card', JSON.stringify({ frames: c.frames, vids: c.vids.map(({ src, ...r }) => r), text: c.text.slice(0, 120) }));
     if (/failed|失败/i.test(c.text) && liveAt == null && at() > 120) { result.failed = c.text.slice(0, 120); break; }
