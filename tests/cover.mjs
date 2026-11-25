@@ -13,7 +13,8 @@ const STAY_S = Number(process.env.CYCLES) > 0 ? Number(process.env.CYCLES) * 60 
 const { ctx, page } = await launch();
 const media = [], net = [];
 ctx.on('console', (m) => { const t = m.text(); if (/\[node media\]|\[runner-live\]|\[clip-render\]|\[clip|turntable/i.test(t)) { media.push(t.slice(0, 400)); log('CON', t.slice(0, 400)); } });
-const clipNet = [];
+const clipNet = [], videoReq = [];
+ctx.on('request', (q) => { const u = q.url(); if (/[?&]tv=/.test(u)) { videoReq.push(`${q.resourceType()} ${(q.headers().range || '').slice(0, 30)}`); if (videoReq.length <= 3) log('VIDEO REQ', q.resourceType(), q.headers().range || ''); } });
 ctx.on('response', (r) => { const u = new URL(r.url()); if (/\/api\/tapnow\/clips/.test(u.pathname) || /[?&]render=clips/.test(u.search)) { const e = `${r.request().method()} ${u.pathname.replace(/[0-9a-f-]{36}/g, ':id')}${/render=clips/.test(u.search) ? '?render=clips' : ''} ${r.status()}`; clipNet.push(e); log('CLIP', e); } });
 ctx.on('response', (r) => { const m = /\/api\/jobs\/[^/]+\/(poster|turntable_video|render_res|clips)$/.exec(new URL(r.url()).pathname); if (m && r.request().method() === 'POST') { net.push(`${m[1]} ${r.status()}`); log('NET', m[1], r.status()); } });
 try {
@@ -59,6 +60,15 @@ try {
       result.video.bytes = await page.evaluate((u) => fetch(u, { method: 'HEAD' }).then((r) => Number(r.headers.get('content-length')) || null).catch(() => null), v.src);
       log('card plays the video', JSON.stringify(result.video), 'at', videoAt); await sleep(8000); await shot(page, 'video-a'); await sleep(12000); await shot(page, 'video-b');
     }
+    if (media.some((m) => /upload ok/.test(m)) && result.motion == null && at() - (readyAt ?? at()) > 40) {
+      // the card may draw its video as a texture (no <video> in the DOM): compare the card's pixels 1.5 s apart
+      const box = await page.evaluate(() => { const n = [...document.querySelectorAll('.react-flow__node')].find((x) => /Step inside/.test(x.textContent)); const r = n?.getBoundingClientRect(); return r ? { x: r.x, y: r.y, width: r.width, height: Math.min(r.height, 400) } : null; });
+      if (box && box.width > 20) {
+        const a1 = await page.screenshot({ clip: box }).catch(() => null); await sleep(1500); const a2 = await page.screenshot({ clip: box }).catch(() => null);
+        let diff = 0; if (a1 && a2) { const n = Math.min(a1.length, a2.length); for (let k = 0; k < n; k += 97) if (a1[k] !== a2[k]) diff++; diff = Math.round((diff / (n / 97)) * 1000) / 10; }
+        result.motion = { changedPct: diff, box: { w: Math.round(box.width), h: Math.round(box.height) } }; log('card motion', JSON.stringify(result.motion)); await shot(page, 'motion');
+      }
+    }
     const clipVid = c.vids.find((x) => !x.tv && x.w > 0 && /clip|deliver|\.mp4/.test(x.src));
     if (clipVid && result.clipVideoAtS == null) { result.clipVideoAtS = at(); result.clipVideo = { w: clipVid.w, h: clipVid.h, seconds: clipVid.seconds }; log('shot card plays its clip', JSON.stringify(result.clipVideo)); await shot(page, 'clip'); }
     if (videoAt != null && (result.clipVideoAtS != null || !/Waiting to render|Rendering|出片/i.test(c.text))) break;
@@ -66,7 +76,8 @@ try {
     if (/failed|失败/i.test(c.text) && liveAt == null && at() > 120) { result.failed = c.text.slice(0, 120); break; }
     if (readyAt != null && at() - readyAt > STAY_S) break;
   }
-  result.liveAtS = liveAt; result.mediaStartAtS = readyAt; result.videoAtS = videoAt; result.media = media; result.net = net; result.clipNet = clipNet; result.lastText = last?.text?.slice(0, 240);
+  result.liveAtS = liveAt; result.mediaStartAtS = readyAt; result.videoAtS = videoAt; result.videoRequests = videoReq.length; result.videoReqKinds = [...new Set(videoReq)].slice(0, 5);
+  result.media = media; result.net = net; result.clipNet = clipNet; result.lastText = last?.text?.slice(0, 240);
   result.lastCard = last && { frames: last.frames, vids: last.vids.map(({ src, ...r }) => r) };
   await shot(page, 'end');
 } catch (e) { result.error = String(e?.message || e); result.media = media; result.net = net; log('ERROR', result.error); await shot(page, 'error'); }
