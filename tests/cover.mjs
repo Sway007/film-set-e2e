@@ -20,6 +20,26 @@ ctx.on('console', (m) => { if (m.type() === 'error' || /video|media|cover/i.test
 ctx.on('request', (q) => { const u = q.url(); if (/[?&]tv=/.test(u)) { videoReq.push(`${q.resourceType()} ${(q.headers().range || '').slice(0, 30)}`); if (videoReq.length <= 3) { log('VIDEO REQ', q.resourceType(), q.headers().range || ''); for (const d of [300, 1500, 4000, 10000]) setTimeout(() => page.evaluate(() => ({ videos: [...document.querySelectorAll('video')].map((v) => ({ tv: /[?&]tv=/.test(v.currentSrc || v.src || ''), ready: v.readyState, net: v.networkState, err: v.error?.code ?? null, paused: v.paused, w: v.videoWidth, inDoc: v.isConnected })), nodes: document.querySelectorAll('.react-flow__node').length, nodeHtml: [...document.querySelectorAll('.react-flow__node')].map((n) => n.innerHTML.length), iframes: [...document.querySelectorAll('iframe')].map((f) => (f.src.match(/render=clips|ui=watch|embed=node/) || ['?'])[0]), canvases: [...document.querySelectorAll('canvas')].map((c) => `${c.width}x${c.height}${c.getAttribute('data-webgpu') != null ? ':gpu' : ''}`).slice(0, 6), gpuAttr: [...document.querySelectorAll('[data-webgpu-plane],[data-render-mode],[data-canvas-renderer]')].map((e) => e.getAttribute('data-render-mode') || e.getAttribute('data-canvas-renderer') || 'plane').slice(0, 4), renderer: { ...(document.querySelector('[data-canvas-renderer]')?.dataset || {}) }, gpuHost: !!document.querySelector('[data-webgpu-host]'), shotHtml: [...document.querySelectorAll('.react-flow__node')].filter((n) => !/Step inside/.test(n.textContent)).map((n) => n.innerHTML.length) })).then((v) => log('VIDEOS after', d, 'ms', JSON.stringify(v))).catch(() => {}), d); } } });
 ctx.on('response', (r) => { const u = new URL(r.url()); if (/\/api\/tapnow\/clips/.test(u.pathname) || /[?&]render=clips/.test(u.search)) { const e = `${r.request().method()} ${u.pathname.replace(/[0-9a-f-]{36}/g, ':id')}${/render=clips/.test(u.search) ? '?render=clips' : ''} ${r.status()}`; clipNet.push(e); log('CLIP', e); } });
 ctx.on('response', (r) => { const m = /\/api\/jobs\/[^/]+\/(poster|turntable_video|render_res|clips)$/.exec(new URL(r.url()).pathname); if (m && r.request().method() === 'POST') { net.push(`${m[1]} ${r.status()}`); log('NET', m[1], r.status()); } });
+// a <video> that fails says why (capture phase: media errors do not bubble)
+await ctx.addInitScript(() => { document.addEventListener('error', (e) => { const v = e.target; if (v && v.tagName === 'VIDEO') console.log('[vid-err]', JSON.stringify({ code: v.error?.code ?? null, message: v.error?.message ?? '', tv: /[?&]tv=/.test(v.currentSrc || v.src || ''), ready: v.readyState, net: v.networkState })); }, true); });
+// the uploaded file itself: its avcC (profile, level), whether this browser says it can play it, and a fresh off-canvas <video>'s verdict
+const probeFile = (u) => page.evaluate(async (u) => {
+  const out = {};
+  try {
+    const b = new Uint8Array(await (await fetch(u)).arrayBuffer()); out.bytes = b.length;
+    const find = (tag) => { const t = [...tag].map((c) => c.charCodeAt(0)); for (let i = 0; i < b.length - 4; i++) if (b[i] === t[0] && b[i + 1] === t[1] && b[i + 2] === t[2] && b[i + 3] === t[3]) return i; return -1; };
+    out.boxes = ['ftyp', 'moov', 'mdat', 'moof', 'avc1', 'avcC', 'hvc1', 'vp09', 'av01'].filter((t) => find(t) >= 0);
+    out.order = ['moov', 'mdat'].map((t) => `${t}@${find(t)}`).join(' ');
+    const c = find('avcC'); if (c >= 0) { const h = (x) => x.toString(16).padStart(2, '0'); out.codec = `avc1.${h(b[c + 5])}${h(b[c + 6])}${h(b[c + 7])}`; out.canPlay = document.createElement('video').canPlayType(`video/mp4; codecs="${out.codec}"`); out.mse = window.MediaSource?.isTypeSupported?.(`video/mp4; codecs="${out.codec}"`) ?? null; }
+    const st = find('stsd'); if (st >= 0) out.stsd = [...b.slice(st + 12, st + 40)].map((x) => (x >= 32 && x < 127 ? String.fromCharCode(x) : '.')).join('');
+    const url = URL.createObjectURL(new Blob([b], { type: 'video/mp4' }));
+    out.fresh = await new Promise((res) => { const v = document.createElement('video'); v.muted = true; v.playsInline = true; const done = (k) => res({ k, code: v.error?.code ?? null, message: v.error?.message ?? '', w: v.videoWidth, h: v.videoHeight, d: Math.round(v.duration || 0) }); v.onloadeddata = () => done('loaded'); v.onerror = () => done('error'); setTimeout(() => done('timeout'), 15000); v.src = url; v.play().catch(() => {}); });
+  } catch (e) { out.err = String(e?.message || e); }
+  return out;
+}, u);
+let probed = false;
+ctx.on('request', (q) => { const u = q.url(); if (!probed && /[?&]tv=/.test(u)) { probed = true; probeFile(u).then((r) => { result.file = r; log('VIDEO FILE', JSON.stringify(r)); }).catch((e) => log('VIDEO FILE probe failed', String(e))); } });
+ctx.on('console', (m) => { if (/\[vid-err\]/.test(m.text())) log('VIDEO ERR', m.text().slice(0, 300)); });
 try {
   await signIn(page);
   // the CineMap preview is behind Vercel Authentication: one top-level visit puts its cookie in this profile (the card's frame needs it)
