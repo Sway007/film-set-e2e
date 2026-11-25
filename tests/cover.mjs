@@ -12,7 +12,7 @@ const AGENT = process.env.AGENT_ENV || 'pr-3679-b7f266';
 const STAY_S = Number(process.env.CYCLES) > 0 ? Number(process.env.CYCLES) * 60 : 420; // minutes on the page after the set is ready
 const { ctx, page } = await launch();
 const media = [], net = [];
-ctx.on('console', (m) => { const t = m.text(); if (/\[node media\]|\[runner-live\]|turntable/i.test(t)) { media.push(t.slice(0, 400)); log('CON', t.slice(0, 400)); } });
+ctx.on('console', (m) => { const t = m.text(); if (/\[node media\]|\[runner-live\]|\[clip-render\]|\[clip|turntable/i.test(t)) { media.push(t.slice(0, 400)); log('CON', t.slice(0, 400)); } });
 const clipNet = [];
 ctx.on('response', (r) => { const u = new URL(r.url()); if (/\/api\/tapnow\/clips/.test(u.pathname) || /[?&]render=clips/.test(u.search)) { const e = `${r.request().method()} ${u.pathname.replace(/[0-9a-f-]{36}/g, ':id')}${/render=clips/.test(u.search) ? '?render=clips' : ''} ${r.status()}`; clipNet.push(e); log('CLIP', e); } });
 ctx.on('response', (r) => { const m = /\/api\/jobs\/[^/]+\/(poster|turntable_video|render_res|clips)$/.exec(new URL(r.url()).pathname); if (m && r.request().method() === 'POST') { net.push(`${m[1]} ${r.status()}`); log('NET', m[1], r.status()); } });
