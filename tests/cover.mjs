@@ -1,0 +1,68 @@
+// CM-1025 (11-25): the cloud renders nothing, so the card's still and its 60 s video are made by the card's viewer in this browser.
+// Builds a new Film set on a new canvas, stays on the page, and reports what the viewer said ([node media] lines), what went up
+// (POST poster / turntable_video / render_res / clips, status only) and what the card plays in the end (a <video>: size, seconds, bytes).
+process.env.BFF_ENV ||= 'pr-11238';
+process.env.FE_HOST ||= 'tapnow-pr-11305.cinemap.space';
+const { FE, BFF, launch, signIn, dismiss, sleep, log, result, save, shot, typeIntoEmptyCard } = await import('./lib.mjs');
+
+const CM = process.env.CM_HOST || 'pr-11305.cinemap.space';
+const CANVAS = process.env.CANVAS_ID;
+const SENTENCE = process.env.SENTENCE || 'A quiet bus stop at dusk with one bench and a streetlight';
+const AGENT = process.env.AGENT_ENV || 'pr-3679-b7f266';
+const STAY_S = Number(process.env.CYCLES) > 0 ? Number(process.env.CYCLES) * 60 : 420; // minutes on the page after the set is ready
+const { ctx, page } = await launch();
+const media = [], net = [];
+ctx.on('console', (m) => { const t = m.text(); if (/\[node media\]|\[runner-live\]|turntable/i.test(t)) { media.push(t.slice(0, 400)); log('CON', t.slice(0, 400)); } });
+ctx.on('response', (r) => { const m = /\/api\/jobs\/[^/]+\/(poster|turntable_video|render_res|clips)$/.exec(new URL(r.url()).pathname); if (m && r.request().method() === 'POST') { net.push(`${m[1]} ${r.status()}`); log('NET', m[1], r.status()); } });
+try {
+  await signIn(page);
+  // the CineMap preview is behind Vercel Authentication: one top-level visit puts its cookie in this profile (the card's frame needs it)
+  const cm = await ctx.newPage(); await cm.goto(`https://${CM}/`, { waitUntil: 'domcontentloaded', timeout: 120000 }).catch(() => {}); await sleep(6000);
+  result.cinemapHost = new URL(cm.url()).host; log('cinemap host after visit', result.cinemapHost); await cm.close();
+  if (!CANVAS) throw new Error('CANVAS_ID input is required');
+  const q = `t=c&bff_env=${BFF}&agent_env=${AGENT}&agent_team=project`;
+  await page.goto(`https://${FE}/p/${CANVAS}?${q}`, { waitUntil: 'domcontentloaded', timeout: 120000 });
+  await sleep(15000);
+  const sw = page.getByRole('button', { name: /^Switch to / });
+  if (await sw.count().catch(() => 0)) { log('switching team'); await sw.first().click(); await sleep(20000); }
+  await dismiss(page);
+  const u0 = page.url();
+  await page.getByText('Canvases', { exact: true }).locator('xpath=..').locator('button').first().click({ timeout: 20000 });
+  for (let i = 0; i < 30 && page.url() === u0; i++) await sleep(1000);
+  result.newCanvas = page.url() !== u0; log('new canvas', result.newCanvas);
+  if (!result.newCanvas) throw new Error('no new canvas');
+  await sleep(15000); await dismiss(page);
+  await page.getByRole('button', { name: 'Add node' }).click(); await sleep(1500);
+  await page.getByTestId('add-node-3d-world').click(); await sleep(4000); await dismiss(page);
+  await typeIntoEmptyCard(page, SENTENCE);
+  const t0 = Date.now(), at = () => Math.round((Date.now() - t0) / 1000);
+  await page.keyboard.press('Enter'); log('sent'); result.sentence = SENTENCE;
+
+  const card = () => page.evaluate(() => {
+    const frames = [...document.querySelectorAll('iframe')].filter((f) => /embed=node/.test(f.src)).map((f) => { let o = 1, el = f; while (el && el !== document.body) { o *= Number(getComputedStyle(el).opacity || 1); el = el.parentElement; } return { job: /[?&]job=/.test(f.src), watch: /ui=watch/.test(f.src), opacity: Math.round(o * 100) / 100 }; });
+    const vids = [...document.querySelectorAll('video')].map((v) => ({ tv: /[?&]tv=/.test(v.currentSrc || v.src || ''), w: v.videoWidth, h: v.videoHeight, seconds: Math.round((v.duration || 0) * 10) / 10, paused: v.paused, src: v.currentSrc || v.src || '' }));
+    const text = [...document.querySelectorAll('.react-flow__node')].map((n) => n.textContent.slice(0, 80)).join(' | ');
+    return { frames, vids, text };
+  });
+  let readyAt = null, liveAt = null, videoAt = null, last = null;
+  for (let i = 0; i < 240; i++) {
+    await sleep(5000);
+    const c = await card().catch(() => null); if (!c) continue; last = c;
+    if (liveAt == null && c.frames.some((f) => f.job && f.opacity > 0.5)) { liveAt = at(); log('live viewer shown', liveAt); await shot(page, 'live'); }
+    if (readyAt == null && net.some((n) => n.startsWith('poster'))) { readyAt = at(); log('still sent', readyAt); await shot(page, 'still-sent'); }
+    if (readyAt == null && media.some((m) => /recording|no video|recorded|skipped|not recording/.test(m))) { readyAt = at(); log('media started', readyAt); }
+    const v = c.vids.find((x) => x.tv && x.w > 0);
+    if (v && videoAt == null) {
+      videoAt = at(); result.video = { w: v.w, h: v.h, seconds: v.seconds, paused: v.paused };
+      result.video.bytes = await page.evaluate((u) => fetch(u, { method: 'HEAD' }).then((r) => Number(r.headers.get('content-length')) || null).catch(() => null), v.src);
+      log('card plays the video', JSON.stringify(result.video), 'at', videoAt); await sleep(8000); await shot(page, 'video-a'); await sleep(12000); await shot(page, 'video-b'); break;
+    }
+    if (i % 6 === 0) log('card', JSON.stringify({ frames: c.frames, vids: c.vids.map(({ src, ...r }) => r), text: c.text.slice(0, 120) }));
+    if (/failed|失败/i.test(c.text) && liveAt == null && at() > 120) { result.failed = c.text.slice(0, 120); break; }
+    if (readyAt != null && at() - readyAt > STAY_S) break;
+  }
+  result.liveAtS = liveAt; result.mediaStartAtS = readyAt; result.videoAtS = videoAt; result.media = media; result.net = net;
+  result.lastCard = last && { frames: last.frames, vids: last.vids.map(({ src, ...r }) => r) };
+  await shot(page, 'end');
+} catch (e) { result.error = String(e?.message || e); result.media = media; result.net = net; log('ERROR', result.error); await shot(page, 'error'); }
+finally { save(); console.log('RESULT ' + JSON.stringify(result)); await ctx.close(); }

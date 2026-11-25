@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       test:
-        description: popup | build | agent | demo | buildclip | selfcheck | walk | windup | cloudsim | webrtc | flicker | vercel-login
+        description: cover | popup | build | agent | demo | buildclip | selfcheck | walk | windup | cloudsim | webrtc | flicker | vercel-login
         required: true
         default: popup
       browser:
