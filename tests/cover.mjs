@@ -40,6 +40,13 @@ const probeFile = (u) => page.evaluate(async (u) => {
 let probed = false;
 ctx.on('request', (q) => { const u = q.url(); if (!probed && /[?&]tv=/.test(u)) { probed = true; probeFile(u).then((r) => { result.file = r; log('VIDEO FILE', JSON.stringify(r)); }).catch((e) => log('VIDEO FILE probe failed', String(e))); } });
 ctx.on('console', (m) => { if (/\[vid-err\]/.test(m.text())) log('VIDEO ERR', m.text().slice(0, 300)); });
+// can this browser play what the card's recorder writes (H.264 in MP4)? Playwright's own Chromium has no H.264 decoder; Google Chrome has
+result.codecs = await page.evaluate(() => { const v = document.createElement('video'); const o = {}; for (const c of ['avc1.42E01F', 'avc1.4D401F', 'avc1.640028', 'avc1.42001f']) o[c] = `${v.canPlayType(`video/mp4; codecs="${c}"`) || 'no'}/${window.MediaSource?.isTypeSupported?.(`video/mp4; codecs="${c}"`) ? 'mse' : '-'}`; o.vp9 = v.canPlayType('video/webm; codecs="vp9"') || 'no'; o.av1 = v.canPlayType('video/mp4; codecs="av01.0.05M.08"') || 'no'; return o; }).catch((e) => String(e));
+result.channel = process.env.CHROME_CHANNEL || 'playwright-chromium'; log('BROWSER', result.channel, JSON.stringify(result.codecs));
+// the uploaded file, read with this profile's cookies (the page itself is cross-origin to it): its boxes and the avcC codec string
+const probeNode = async (u) => { try { const r = await ctx.request.get(u); const b = Buffer.from(await r.body()); const at = (t) => b.indexOf(Buffer.from(t)); const c = at('avcC'); const o = { status: r.status(), bytes: b.length, boxes: ['ftyp', 'moov', 'mdat', 'moof', 'avc1', 'avcC', 'hvc1', 'vp09', 'av01'].filter((t) => at(t) >= 0), moov: at('moov'), mdat: at('mdat'), head: b.slice(0, 32).toString('hex') }; if (c >= 0) o.codec = `avc1.${b.slice(c + 5, c + 8).toString('hex')}`; result.fileNode = o; log('VIDEO FILE (node)', JSON.stringify(o)); } catch (e) { log('VIDEO FILE (node) failed', String(e?.message || e)); } };
+let probedNode = false;
+ctx.on('request', (q) => { if (!probedNode && /[?&]tv=/.test(q.url())) { probedNode = true; probeNode(q.url()); } });
 try {
   await signIn(page);
   // the CineMap preview is behind Vercel Authentication: one top-level visit puts its cookie in this profile (the card's frame needs it)

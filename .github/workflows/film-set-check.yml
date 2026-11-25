@@ -55,6 +55,10 @@ on:
         description: flicker test, pick / click-away cycles
         required: false
         default: '6'
+      channel:
+        description: chromium only, a browser installed on the Mac instead of Playwright's Chromium (chrome = Google Chrome, which plays H.264)
+        required: false
+        default: ''
       sentence:
         description: build test, the sentence for the new set; agent test, what to say to the agent
         required: false
@@ -90,6 +94,7 @@ jobs:
           OPEN_VIEW: ${{ inputs.open_view }}
           FE_HOST: ${{ inputs.fe_host || 'tapnow-pr-2178.cinemap.space' }}
           CYCLES: ${{ inputs.cycles }}
+          CHROME_CHANNEL: ${{ inputs.channel }}
           T_USER: ${{ secrets.TAPNOW_USER }}
           T_PASS: ${{ secrets.TAPNOW_PASS }}
           # Screenshots and the screen recording stay on this Mac, in ~/.film-set-e2e/results/run-<n>-<test>-<browser>
