@@ -14,7 +14,10 @@ const { ctx, page } = await launch();
 const media = [], net = [];
 ctx.on('console', (m) => { const t = m.text(); if (/\[node media\]|\[runner-live\]|\[clip-render\]|\[clip|turntable/i.test(t)) { media.push(t.slice(0, 400)); log('CON', t.slice(0, 400)); } });
 const clipNet = [], videoReq = [];
-ctx.on('request', (q) => { const u = q.url(); if (/[?&]tv=/.test(u)) { videoReq.push(`${q.resourceType()} ${(q.headers().range || '').slice(0, 30)}`); if (videoReq.length <= 3) log('VIDEO REQ', q.resourceType(), q.headers().range || ''); } });
+ctx.on('response', async (r) => { const u = r.url(); if (/[?&]tv=/.test(u)) { const h = r.headers(); log('VIDEO RES', r.status(), h['content-type'] || '', h['content-range'] || h['content-length'] || ''); } });
+ctx.on('requestfailed', (q) => { if (/[?&]tv=/.test(q.url())) log('VIDEO FAILED', q.failure()?.errorText || ''); });
+ctx.on('console', (m) => { if (m.type() === 'error' || /video|media|cover/i.test(m.text())) { const t = m.text(); if (!/favicon|sso-api/.test(t)) log('CONERR', m.type(), t.slice(0, 260)); } });
+ctx.on('request', (q) => { const u = q.url(); if (/[?&]tv=/.test(u)) { videoReq.push(`${q.resourceType()} ${(q.headers().range || '').slice(0, 30)}`); if (videoReq.length <= 3) { log('VIDEO REQ', q.resourceType(), q.headers().range || ''); for (const d of [300, 1500, 4000, 10000]) setTimeout(() => page.evaluate(() => [...document.querySelectorAll('video')].map((v) => ({ tv: /[?&]tv=/.test(v.currentSrc || v.src || ''), ready: v.readyState, net: v.networkState, err: v.error?.code ?? null, paused: v.paused, w: v.videoWidth, inDoc: v.isConnected }))).then((v) => log('VIDEOS after', d, 'ms', JSON.stringify(v))).catch(() => {}), d); } } });
 ctx.on('response', (r) => { const u = new URL(r.url()); if (/\/api\/tapnow\/clips/.test(u.pathname) || /[?&]render=clips/.test(u.search)) { const e = `${r.request().method()} ${u.pathname.replace(/[0-9a-f-]{36}/g, ':id')}${/render=clips/.test(u.search) ? '?render=clips' : ''} ${r.status()}`; clipNet.push(e); log('CLIP', e); } });
 ctx.on('response', (r) => { const m = /\/api\/jobs\/[^/]+\/(poster|turntable_video|render_res|clips)$/.exec(new URL(r.url()).pathname); if (m && r.request().method() === 'POST') { net.push(`${m[1]} ${r.status()}`); log('NET', m[1], r.status()); } });
 try {
