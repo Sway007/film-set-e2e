@@ -12,7 +12,7 @@ const AGENT = process.env.AGENT_ENV || 'pr-3679-b7f266';
 const STAY_S = Number(process.env.CYCLES) > 0 ? Number(process.env.CYCLES) * 60 : 420; // minutes on the page after the set is ready
 const { ctx, page } = await launch();
 const media = [], net = [];
-ctx.on('console', (m) => { const t = m.text(); if (/\[node media\]|\[runner-live\]|\[clip-render\]|\[clip|turntable|falling back to React Flow|webgpu/i.test(t)) { media.push(t.slice(0, 400)); log('CON', t.slice(0, 400)); } });
+ctx.on('console', (m) => { const t = m.text(); if (/\[node media\]|\[runner-live\]|\[clip-render\]|\[clip|closing|no HTTP answer|turntable|falling back to React Flow|webgpu/i.test(t)) { media.push(t.slice(0, 400)); log('CON', t.slice(0, 400)); } });
 const clipNet = [], videoReq = [];
 ctx.on('response', async (r) => { const u = r.url(); if (/[?&]tv=/.test(u)) { const h = r.headers(); log('VIDEO RES', r.status(), h['content-type'] || '', h['content-range'] || h['content-length'] || ''); } });
 ctx.on('requestfailed', (q) => { if (/[?&]tv=/.test(q.url())) log('VIDEO FAILED', q.failure()?.errorText || ''); });
@@ -101,6 +101,12 @@ try {
     }
     const clipVid = c.vids.find((x) => !x.tv && x.w > 0 && /clip|deliver|\.mp4/.test(x.src));
     if (clipVid && result.clipVideoAtS == null) { result.clipVideoAtS = at(); result.clipVideo = { w: clipVid.w, h: clipVid.h, seconds: clipVid.seconds }; log('shot card plays its clip', JSON.stringify(result.clipVideo)); await shot(page, 'clip'); }
+    if (/Rendering|Waiting to render/i.test(c.text)) result.sawShot = true;
+    // a delivered shot card is an ordinary video node: in WebGPU its cover is painted by the GPU, so it has no DOM text; hover it to play
+    if (result.sawShot && !result.shotHover && !/Rendering|Waiting to render/i.test(c.text)) {
+      const sb = await page.evaluate(() => { const n = [...document.querySelectorAll('.react-flow__node')].find((x) => !/Step inside/.test(x.textContent)); const r = n?.getBoundingClientRect(); return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height } : null; }).catch(() => null);
+      if (sb) { await page.mouse.move(sb.x, sb.y); await sleep(4000); const hv = await page.evaluate(() => [...document.querySelectorAll('video')].map((v) => ({ tv: /[?&]tv=/.test(v.currentSrc || v.src || ''), w: v.videoWidth, h: v.videoHeight, d: Math.round(v.duration || 0), paused: v.paused, err: v.error?.code ?? null }))).catch(() => null); result.shotHover = { at: at(), box: { w: Math.round(sb.w), h: Math.round(sb.h) }, videos: hv }; log('SHOT hover', JSON.stringify(result.shotHover)); await shot(page, 'shot-hover'); await page.mouse.move(5, 5); }
+    }
     if (videoAt != null && (result.clipVideoAtS != null || !/Waiting to render|Rendering|出片/i.test(c.text))) break;
     if (i % 6 === 0) log('renderer', JSON.stringify(await page.evaluate(() => ({ ...(document.querySelector('[data-canvas-renderer]')?.dataset || {}) })).catch(() => null)));
     if (i % 6 === 0) log('card', JSON.stringify({ frames: c.frames, vids: c.vids.map(({ src, ...r }) => r), text: c.text.slice(0, 120) }));
