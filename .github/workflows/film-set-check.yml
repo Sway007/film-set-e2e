@@ -59,6 +59,10 @@ on:
         description: Vercel share token of the CineMap preview (so a fresh browser profile can open it)
         required: false
         default: ''
+      bff_env:
+        description: test BFF env (default pr-11238)
+        required: false
+        default: ''
       channel:
         description: chromium only, a browser installed on the Mac instead of Playwright's Chromium (chrome = Google Chrome, which plays H.264)
         required: false
@@ -99,6 +103,7 @@ jobs:
           FE_HOST: ${{ inputs.fe_host || 'tapnow-pr-2178.cinemap.space' }}
           CYCLES: ${{ inputs.cycles }}
           CHROME_CHANNEL: ${{ inputs.channel }}
+          BFF_ENV: ${{ inputs.bff_env }}
           CM_SHARE: ${{ inputs.cm_share }}
           T_USER: ${{ secrets.TAPNOW_USER }}
           T_PASS: ${{ secrets.TAPNOW_PASS }}
