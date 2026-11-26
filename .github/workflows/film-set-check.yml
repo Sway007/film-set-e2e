@@ -63,6 +63,10 @@ on:
         description: test BFF env (default pr-11238)
         required: false
         default: ''
+      bg_test:
+        description: cover test, hide the canvas tab for 45 s after the first clip claim, then reload once
+        required: false
+        default: ''
       channel:
         description: chromium only, a browser installed on the Mac instead of Playwright's Chromium (chrome = Google Chrome, which plays H.264)
         required: false
@@ -104,6 +108,7 @@ jobs:
           CYCLES: ${{ inputs.cycles }}
           CHROME_CHANNEL: ${{ inputs.channel }}
           BFF_ENV: ${{ inputs.bff_env }}
+          BG_TEST: ${{ inputs.bg_test }}
           CM_SHARE: ${{ inputs.cm_share }}
           T_USER: ${{ secrets.TAPNOW_USER }}
           T_PASS: ${{ secrets.TAPNOW_PASS }}

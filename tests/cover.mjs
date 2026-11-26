@@ -175,6 +175,15 @@ try {
       if (sb) { await page.mouse.move(sb.x, sb.y); await sleep(4000); const hv = await page.evaluate(() => [...document.querySelectorAll('video')].map((v) => ({ tv: /[?&]tv=/.test(v.currentSrc || v.src || ''), w: v.videoWidth, h: v.videoHeight, d: Math.round(v.duration || 0), paused: v.paused, err: v.error?.code ?? null }))).catch(() => null); result.shotHover = { at: at(), box: { w: Math.round(sb.w), h: Math.round(sb.h) }, videos: hv }; log('SHOT hover', JSON.stringify(result.shotHover)); await shot(page, 'shot-hover'); await page.mouse.move(5, 5); }
     }
     // in WebGPU the shot cards are GPU-painted (no DOM text), so wait for the clip queue to go quiet: claims seen, nothing for 120 s
+    // BG_TEST: once the first clip is claimed, hide the canvas tab for 45 s (another tab in front), then come back: the clip must go back to
+    // waiting (POST .../release) and be claimed again, not fail. Then reload the page once and check the clips still finish.
+    if (process.env.BG_TEST && !result.bgDone && clipNet.some((x) => /claim 200/.test(x))) {
+      result.bgDone = true; const other = await ctx.newPage(); await other.goto('about:blank'); await other.bringToFront();
+      log('BG hidden', JSON.stringify(await page.evaluate(() => document.visibilityState).catch(() => null))); await sleep(45000);
+      await page.bringToFront(); await other.close(); log('BG back', JSON.stringify(await page.evaluate(() => document.visibilityState).catch(() => null)));
+      result.bgRelease = clipNet.filter((x) => /release/.test(x)); result.bgFail = clipNet.filter((x) => /\/fail /.test(x)); log('BG release/fail', JSON.stringify({ release: result.bgRelease, fail: result.bgFail }));
+      await sleep(20000); log('BG reload'); await page.reload({ waitUntil: 'domcontentloaded', timeout: 120000 }).catch(() => {}); await sleep(15000); lastClipAt = Date.now();
+    }
     const claims = clipNet.filter((x) => /claim/.test(x)).length;
     if (videoAt != null && claims > 0 && Date.now() - lastClipAt > 120000) {
       result.claims = claims;
