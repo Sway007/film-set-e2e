@@ -18,6 +18,7 @@ const FULL_TRACE = process.env.FULL_TRACE === '1';
 
 const { ctx, page } = await launch();
 let cdp = null;
+const consoleLines = [];
 const inFrame = (re) => page.frames().find((f) => re.test(f.url()));
 const iframeOf = () => inFrame(/\/p\/[^?]+\?embed=node/);
 const viewerOf = () => inFrame(/editor\.html/);
@@ -69,7 +70,6 @@ try {
 
   const apiStatus = [];
   ctx.on('response', (r) => { const u = r.url(); if (/cinemap\.space\/(api\/|p\/|editor\.html)/.test(u) && apiStatus.length < 60) { let p = '?'; try { const x = new URL(u); p = x.pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/g, '<id>'); } catch {} apiStatus.push(`${r.status()} ${r.request().method()} ${p}`); } });
-  const consoleLines = [];
   page.on('console', (m) => { const t = m.text(); if (/\[node\]|cinemap|scene|editor|webgl|fail/i.test(t) && consoleLines.length < 40) consoleLines.push(`${m.type()}: ${t.replace(/https?:\/\/\S+/g, '<url>').slice(0, 200)}`); });
   const net = netCollector(ctx, page);
   const page0 = await ctx.newCDPSession(page);
