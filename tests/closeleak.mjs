@@ -15,9 +15,16 @@ import { startProfile, stopProfile } from './profile.mjs';
 const CANVAS = process.env.CANVAS_ID; if (!CANVAS) throw new Error('CANVAS_ID input is required');
 const MATCH = new RegExp(process.env.SET_MATCH || '.', 'i');
 const CYCLES = Math.max(1, Math.min(10, Number(process.env.CYCLES || 4) || 4));
-const KEPT_WAIT = process.env.KEPT_WAIT !== '0';
+// Hard cap on the whole test (the Mac runner is shared): optional phases are skipped when they no longer fit, and at the cap the
+// result so far is saved and the process exits. The keeper's real let-go timers (2 / 10 min) do not fit; its let-go is
+// reproduced instead by removing the parked iframes the way the keeper's drop() does (element.remove()).
+const CAP_MS = Math.max(120, Number(process.env.CAP_S || 360)) * 1000;
+const T0 = Date.now(); const left = () => CAP_MS - (Date.now() - T0);
+setTimeout(async () => { result.timedOut = `hard cap ${CAP_MS / 1000} s`; try { save(); } catch {} await Promise.race([ctx.close().catch(() => {}), sleep(10000)]); process.exit(0); }, CAP_MS).unref();
 
-const { ctx, page } = await launch();
+// Playwright 1.48's Chromium (130) has no Element.moveBefore, so the canvas would neither keep nor prewarm viewers
+// (canKeepCinemapViewers() is false); these flags turn it on where the build has it behind a flag. result.env.moveBefore says.
+const { ctx, page } = await launch(undefined, { args: process.env.CHROME_CHANNEL ? [] : ['--enable-blink-features=MoveBefore', '--enable-experimental-web-platform-features'] });
 const isIframe = (f) => /\/p\/[^?]+\?embed=node/.test(f.url());
 const isViewer = (f) => /editor\.html/.test(f.url());
 const cmFrames = () => page.frames().filter((f) => !f.isDetached() && (isIframe(f) || isViewer(f)));
@@ -126,10 +133,10 @@ async function openPopup(at) {
   const viaButton = await page.evaluate(({ x, y }) => { const bs = [...document.querySelectorAll('[data-testid="cinemap-world-enter"]')].map((e) => { const r = e.getBoundingClientRect(); return { e, d: Math.hypot(r.x + r.width / 2 - x, r.y + r.height / 2 - y), ok: r.width > 0 }; }).filter((b) => b.ok && b.d < 400).sort((a, b) => a.d - b.d); if (bs[0]) { bs[0].e.click(); return true; } return false; }, at);
   if (!viaButton) await page.mouse.dblclick(at.x, at.y);
   let state = null, pictureMs = null;
-  for (let k = 0; k < 240; k++) {
+  for (let k = 0; k < 240 && Date.now() - t0 < 45000; k++) {
     state = await page.evaluate(() => { const d = document.querySelector('[data-testid="cinemap-world-detail-dialog"]') || document.querySelector('[data-testid="cinemap-world-detail"]'); const c = d?.querySelector('[data-testid="cinemap-world-frame-cover"]'); return { dialog: !!d, iframe: !!d?.querySelector('iframe'), coverShown: c?.hasAttribute('data-shown') ?? null, failed: !!d?.querySelector('[data-testid="cinemap-world-preview-failed"],[data-testid="cinemap-world-frame-error"]'), inTab: !!d?.querySelector('[data-testid="cinemap-world-open-in-tab"]') }; }).catch(() => ({}));
-    if (state.iframe && state.coverShown === false) { pictureMs = Date.now() - t0; break; }
     if (state.failed || state.inTab) break;
+    if (state.iframe && state.coverShown === false) { pictureMs = Date.now() - t0; break; }
     await sleep(250);
   }
   return { opened: viaButton ? 'button' : 'double click', pictureMs, state };
@@ -174,6 +181,12 @@ try {
   // 3. open, picture, idle 5 s, close, then 20 s closed
   await page.mouse.move(at.x, at.y);
   result.open1 = await openPopup(at); log('open 1', JSON.stringify(result.open1));
+  if (result.open1.pictureMs == null || result.open1.state?.failed) { await sleep(3000); }
+  if (result.open1.pictureMs == null || result.open1.state?.failed || !cmFrames().some(isViewer)) {
+    result.open1.failText = await page.evaluate(() => { const e = document.querySelector('[data-testid="cinemap-world-preview-failed"],[data-testid="cinemap-world-frame-error"]'); return e ? e.innerText.replace(/\s+/g, ' ').slice(0, 160) : null; }).catch(() => null);
+    result.open1.frames = cmFrames().map(label); result.open1.iframeState = await Promise.all(cmFrames().filter(isIframe).map(iframeState));
+    throw new Error('popup did not show the picture (no viewer frame) — not a leak result');
+  }
   await shot(page, '1-open');
   result.open1.renderRateOpen = await renderRate(3);
   result.open1.memOpen = await memory('mem open 1');
@@ -188,34 +201,30 @@ try {
   result.cycles = []; let lastClose = closedAt;
   result.cycles.push({ cycle: 1, pictureMs: result.open1.pictureMs, closed: result.open1.closed, mem: await memory('mem after close 1') });
   for (let c = 2; c <= CYCLES; c++) {
+    if (left() < 100000) { result.cyclesSkipped = CYCLES - c + 1; break; }
     await page.mouse.move(at.x, at.y); await sleep(500);
     const o = await openPopup(at); await sleep(5000);
     const closed = await closePopup(); lastClose = Date.now(); await page.mouse.move(pane.x, pane.y); await sleep(3000);
     result.cycles.push({ cycle: c, pictureMs: o.pictureMs, opened: o.opened, closed, mem: await memory(`mem after close ${c}`) });
   }
-  result.afterCycles = await measure('after cycles', 15, { sites: true });
+  if (left() > 60000) result.afterCycles = await measure('after cycles', 15, { sites: true });
 
-  // 5. hover other finished sets (prewarm), up to 3
-  const others = ready.filter((n) => n !== target).slice(0, 3); result.otherHovers = [];
+  // 5. hover other finished sets (prewarm), up to 2, when there is time
+  const others = ready.filter((n) => n !== target).slice(0, 2); result.otherHovers = [];
   for (const n of others) {
+    if (left() < 90000) break;
     const p = await focusBySearch(page, name(n)).catch(() => null); if (!p) { result.otherHovers.push({ found: false }); continue; }
     await page.mouse.move(p.x, p.y); await sleep(6000); await page.mouse.move(pane.x, pane.y); await sleep(1000);
     result.otherHovers.push({ found: true, dom: await domIframes() });
   }
-  if (others.length) { result.memAfterHovers = await memory('mem after other hovers'); result.afterHovers = await measure('after other hovers', 15, { sites: true }); }
-  // back to the first set so the canvas view matches the baseline's
-  await focusBySearch(page, name(target)).catch(() => null); await page.mouse.move(pane.x, pane.y);
+  if (result.otherHovers.some((h) => h.found) && left() > 60000) result.afterHovers = await measure('after other hovers', 10, { sites: true });
 
-  // 6. wait past the prewarm let-go (2 min)
-  await sleep(130000);
-  result.memAfter130s = await memory('mem +130 s');
-  result.after130s = await measure('+130 s', 15, { sites: true });
-
-  // 7. wait past the kept let-go (10 min after the last close)
-  if (KEPT_WAIT) {
-    const wait = lastClose + 10.5 * 60000 - Date.now(); if (wait > 0) { log('waiting for the kept let-go', Math.round(wait / 1000), 's'); await sleep(wait); }
-    result.memAfterKeptLetGo = await memory('mem after kept let-go');
-    result.afterKeptLetGo = await measure('after kept let-go', 15, { sites: true });
+  // 6. let-go: remove the parked iframes as the keeper's drop() does, then memory and work again
+  if (left() > 30000) {
+    result.letGo = { removed: await page.evaluate(() => { const lot = document.querySelector('[data-testid="cinemap-viewer-keeper"]'); const fs = lot ? [...lot.querySelectorAll('iframe')] : []; for (const f of fs) f.remove(); return fs.length; }).catch(() => null) };
+    await sleep(5000);
+    result.memAfterLetGo = await memory('mem after let-go');
+    if (left() > 20000) result.afterLetGo = await measure('after let-go', 10);
   }
   await shot(page, '3-end');
 } catch (e) { result.error = String(e?.message || e); log('ERROR', result.error); await shot(page, 'error'); }
