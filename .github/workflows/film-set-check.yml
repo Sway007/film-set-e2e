@@ -103,7 +103,15 @@ jobs:
       - name: Mask inputs
         run: node -e "const i=require(process.env.GITHUB_EVENT_PATH).inputs||{};for(const k of ['vercel_share','canvas_id','video_key','cm_share'])if(i[k])console.log('::add-mask::'+i[k])"
       - run: npm install --no-audit --no-fund
-      - run: npx playwright install ${{ inputs.browser }}
+      # Playwright's CDN is slow from the Mac's network (11-27: a new Chromium stalled for 10+ min): try the npmmirror copy
+      # first, each attempt capped at 6 min, then the default CDN. Headed runs only, so the headless shell is skipped.
+      - name: Install browser
+        if: ${{ inputs.channel == '' }}
+        run: |
+          try() { perl -e 'alarm shift; exec @ARGV' 360 "$@"; }
+          if [ "${{ inputs.browser }}" = chromium ]; then a="chromium --no-shell"; else a="${{ inputs.browser }}"; fi
+          PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright try npx playwright install $a \
+            || try npx playwright install $a
       - name: Run
         env:
           BROWSER: ${{ inputs.browser }}
