@@ -53,6 +53,11 @@ try {
   const overview = watchOverview(page);
   // CineMap's own preview (Vercel Authentication) once in this profile, so the popup's iframe is not sent to the login page.
   if (process.env.CM_SHARE) { await page.goto(`https://pr-11305.cinemap.space/?_vercel_share=${process.env.CM_SHARE}`, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {}); await sleep(3000); }
+  // Clone fix (cinemap #2280 / fe #11570): a cloned canvas copies the source owner's set into the viewer's own on first open.
+  // Record each copy call's status and outcome (no ids), so a second run shows whether a reopen copies again.
+  result.copyCalls = [];
+  ctx.on('response', async (r) => { if (!/\/cinemap\/worlds\/[^/]+\/copy/.test(r.url()) || r.request().method() !== 'POST') return; const c = { status: r.status(), atS: Math.round((Date.now() - tStart) / 1000) }; try { const d = await r.json(); const x = d?.data ?? d; c.copied = x?.copy?.copied ?? null; c.existed = x?.copy?.existed ?? null; c.code = x?.code ?? d?.error?.code ?? null; } catch {} result.copyCalls.push(c); log('copy call', JSON.stringify(c)); });
+  const tStart = Date.now();
   await signIn(page);
   await page.goto(`https://${FE}/p/${CANVAS}?t=c&bff_env=${BFF}`, { waitUntil: 'domcontentloaded', timeout: 120000 });
   await sleep(25000); await dismiss(page);
@@ -61,6 +66,7 @@ try {
     || overview.nodes.find((n) => MATCH.test(`${n.data.title || ''} ${n.data.cinemap.title || ''} ${n.data.cinemap.brief || ''}`));
   result.nodesOnCanvas = overview.nodes.length;
   if (!target) throw new Error(`no film set matching ${MATCH} (${overview.nodes.length} film set nodes)`);
+  { const sid = String(target.data.cinemap.scene_id || ''); result.sceneOnLoadHash = sid ? (await import('node:crypto')).createHash('sha256').update(sid).digest('hex').slice(0, 6) : null; }
   result.set = { status: target.data.cinemap.status, stats: target.data.cinemap.stats ?? null, shots: Array.isArray(target.data.cinemap.shots) ? target.data.cinemap.shots.length : null };
   const label = String(target.data.title || target.data.cinemap.title || target.data.cinemap.brief || '').slice(0, 30);
   const at = await focusBySearch(page, label);
