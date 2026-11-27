@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       test:
-        description: cover | popup | build | agent | demo | buildclip | selfcheck | walk | windup | cloudsim | webrtc | flicker | vercel-login
+        description: playperf | cover | popup | build | agent | demo | buildclip | selfcheck | walk | windup | cloudsim | webrtc | flicker | vercel-login
         required: true
         default: popup
       browser:
@@ -71,6 +71,18 @@ on:
         description: chromium only, a browser installed on the Mac instead of Playwright's Chromium (chrome = Google Chrome, which plays H.264)
         required: false
         default: ''
+      full_trace:
+        description: 1 = record Chrome traces (DevTools Performance panel files, kept on the Mac) and summarise them
+        required: false
+        default: ''
+      opens:
+        description: playperf test, how many times the popup is opened (the first with the HTTP cache cleared)
+        required: false
+        default: '2'
+      play_seconds:
+        description: playperf test, seconds of playback recorded in the popup
+        required: false
+        default: '12'
       sentence:
         description: build test, the sentence for the new set; agent test, what to say to the agent
         required: false
@@ -110,6 +122,9 @@ jobs:
           BFF_ENV: ${{ inputs.bff_env }}
           BG_TEST: ${{ inputs.bg_test }}
           CM_SHARE: ${{ inputs.cm_share }}
+          FULL_TRACE: ${{ inputs.full_trace }}
+          OPENS: ${{ inputs.opens }}
+          PLAY_SECONDS: ${{ inputs.play_seconds }}
           T_USER: ${{ secrets.TAPNOW_USER }}
           T_PASS: ${{ secrets.TAPNOW_PASS }}
           # Screenshots and the screen recording stay on this Mac, in ~/.film-set-e2e/results/run-<n>-<test>-<browser>
