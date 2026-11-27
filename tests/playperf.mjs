@@ -67,6 +67,10 @@ try {
   await page.mouse.move(at.x, at.y); await sleep(4000);
   await shot(page, '0-focused');
 
+  const apiStatus = [];
+  ctx.on('response', (r) => { const u = r.url(); if (/cinemap\.space\/(api\/|p\/|editor\.html)/.test(u) && apiStatus.length < 60) { let p = '?'; try { const x = new URL(u); p = x.pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/g, '<id>'); } catch {} apiStatus.push(`${r.status()} ${r.request().method()} ${p}`); } });
+  const consoleLines = [];
+  page.on('console', (m) => { const t = m.text(); if (/\[node\]|cinemap|scene|editor|webgl|fail/i.test(t) && consoleLines.length < 40) consoleLines.push(`${m.type()}: ${t.replace(/https?:\/\/\S+/g, '<url>').slice(0, 200)}`); });
   const net = netCollector(ctx, page);
   const page0 = await ctx.newCDPSession(page);
   result.opens = [];
@@ -88,12 +92,15 @@ try {
       state = await page.evaluate(() => { const d = document.querySelector('[data-testid="cinemap-world-detail-dialog"]') || document.querySelector('[data-testid="cinemap-world-detail"]'); const c = d?.querySelector('[data-testid="cinemap-world-frame-cover"]'); return { dialog: !!d, iframe: !!d?.querySelector('iframe'), loading: !!d?.querySelector('[data-testid="cinemap-world-viewer-loading"]'), coverShown: c?.hasAttribute('data-shown') ?? null, failed: !!d?.querySelector('[data-testid="cinemap-world-preview-failed"],[data-testid="cinemap-world-frame-error"]'), inTab: !!d?.querySelector('[data-testid="cinemap-world-open-in-tab"]') }; });
       if (state.dialog && !marks.dialog) marks.dialog = Date.now() - t0;
       if (state.iframe && !marks.iframeEl) marks.iframeEl = Date.now() - t0;
+      if (state.failed || state.inTab) { marks.failedAt = Date.now() - t0; break; }
       if (state.iframe && state.coverShown === false) { marks.picture = Date.now() - t0; break; }
-      if (state.failed || state.inTab) break;
       await sleep(250);
     }
     page.off('framenavigated', onNav); page.off('framenavigated', onAttach);
     const open = { cold, opened: viaButton ? 'button' : 'double click', marksMs: marks, state };
+    open.failText = await page.evaluate(() => { const d = document.querySelector('[data-testid="cinemap-world-detail-dialog"]') || document.querySelector('[data-testid="cinemap-world-detail"]'); const f = d?.querySelector('[data-testid="cinemap-world-preview-failed"],[data-testid="cinemap-world-frame-error"]'); return f ? f.innerText.slice(0, 200) : null; }).catch(() => null);
+    open.iframeState = await iframeOf()?.evaluate(() => ({ state: document.body?.dataset?.state ?? null, text: (document.querySelector('[data-state],[class*="state"],[class*="error"]')?.innerText || '').slice(0, 160), frames: document.querySelectorAll('iframe').length })).catch((e) => ({ error: e.message.slice(0, 80) }));
+    open.apiStatus = apiStatus.splice(0);
     await sleep(3000); // let the last loads land before reading resource timing
     open.iframeSelf = await selfTiming(iframeOf());
     open.viewerSelf = await selfTiming(viewerOf());
@@ -138,4 +145,4 @@ try {
     await toggle.click().catch(() => {});
   }
 } catch (e) { result.error = String(e?.message || e); log('ERROR', result.error); await shot(page, 'error'); }
-finally { if (cdp) await stopTrace(cdp, 'trace-end').catch(() => {}); save(); await ctx.close(); }
+finally { result.console = consoleLines; if (cdp) await stopTrace(cdp, 'trace-end').catch(() => {}); save(); await ctx.close(); }
