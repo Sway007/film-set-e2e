@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       test:
-        description: playperf | cover | popup | build | agent | demo | buildclip | selfcheck | walk | windup | cloudsim | webrtc | flicker | vercel-login
+        description: closeleak | playperf | cover | popup | build | agent | demo | buildclip | selfcheck | walk | windup | cloudsim | webrtc | flicker | vercel-login
         required: true
         default: popup
       browser:
@@ -52,7 +52,7 @@ on:
         required: false
         default: ''
       cycles:
-        description: flicker test, pick / click-away cycles
+        description: flicker test, pick / click-away cycles; closeleak test, open / close cycles
         required: false
         default: '6'
       cm_share:
