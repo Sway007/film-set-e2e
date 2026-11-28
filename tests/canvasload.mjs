@@ -101,11 +101,25 @@ try {
     // Sway 11-28: measure while a clip renders. Ask the canvas agent (SENTENCE) to reshoot one shot, then sample back to back
     // (SECONDS each) until the clip render frame has come and gone (+1 sample), or 15 min.
     if (await page.getByText('Front desk', { exact: true }).nth(1).isVisible().catch(() => false)) { await page.mouse.click(631, 40); await sleep(1500); }
+    // What happened after the sentence: agent-gateway calls (status, run id prefix) and CineMap / world API calls (method, path, status).
+    const diag = (result.diag = { gateway: [], runs: [], cinemap: [] });
+    const pathOf = (u) => { try { const x = new URL(u); return x.host.split('.')[0] + x.pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/g, '<id>').slice(0, 80); } catch { return '?'; } };
+    page.on('response', (r) => { const u = r.url(); const t = Math.round((Date.now() - (globalThis.__tSent || Date.now())) / 1000);
+      if (/agent-gateway/.test(u) && diag.gateway.length < 40) diag.gateway.push(`${t}s ${r.status()} ${r.request().method()} ${pathOf(u)}`);
+      else if (/cinemap|world/i.test(u) && !/\.(js|css|png|jpg|webp|woff2?)(\?|$)/.test(u) && diag.cinemap.length < 60) diag.cinemap.push(`${t}s ${r.status()} ${r.request().method()} ${pathOf(u)}`); });
+    page.on('request', (r) => { const m = r.url().match(/runs\/([0-9a-f-]{36})/); if (m && !diag.runs.includes(m[1].slice(0, 8))) diag.runs.push(m[1].slice(0, 8)); });
+    const input = page.locator('textarea, [contenteditable="true"]').last();
     await page.mouse.click(700, 450); await page.keyboard.press('/'); await sleep(1500);
-    await page.keyboard.type(process.env.SENTENCE, { delay: 20 }); await sleep(500); await page.keyboard.press('Enter');
-    const tSent = Date.now(); log('sent the reshoot sentence');
+    diag.focus = await page.evaluate(() => { const a = document.activeElement; return a ? `${a.tagName.toLowerCase()}${a.getAttribute('contenteditable') ? '[ce]' : ''}` : null; });
+    await page.keyboard.type(process.env.SENTENCE, { delay: 20 }); await sleep(500);
+    diag.typedChars = await page.evaluate(() => { const a = document.activeElement; return a ? (a.value ?? a.textContent ?? '').length : 0; });
+    await page.keyboard.press('Enter'); await shot(page, 'r-sent');
+    globalThis.__tSent = Date.now();
+    const tSent = Date.now(); log('sent the reshoot sentence', JSON.stringify({ focus: diag.focus, typed: diag.typedChars }));
+    void input;
     result.timeline = []; let seen = false, goneAfter = 0;
-    while (Date.now() - tSent < 15 * 60_000) {
+    const RESHOOT_MS = Number(process.env.CYCLES || 15) * 60_000; // reshoot mode: CYCLES = minutes to wait for the render
+    while (Date.now() - tSent < RESHOOT_MS) {
       const o = await sample(`r-${Math.round((Date.now() - tSent) / 1000)}s`);
       const kinds = o.after?.byKind || {}; const render = (kinds.clipRender?.n || 0) > 0;
       const cr = o.cinemapFrames.find((f) => f.kind === 'clipRender');
@@ -114,7 +128,7 @@ try {
         renderFps: cr?.fps ?? null, renderLongMs: cr?.longMs ?? null });
       if (render) seen = true; else if (seen && ++goneAfter >= 2) break;
     }
-    result.renderSeen = seen;
+    result.renderSeen = seen; log('diag', JSON.stringify(diag));
     await shot(page, 'r-end');
   }
   await page.mouse.move(result.env?.w ? result.env.w * 0.7 : 900, 400); await page.keyboard.press('f').catch(() => {}); await sleep(4000);
