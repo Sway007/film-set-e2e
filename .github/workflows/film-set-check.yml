@@ -59,6 +59,10 @@ on:
         description: Vercel share token of the CineMap preview (so a fresh browser profile can open it)
         required: false
         default: ''
+      share_url:
+        description: canvasload test, a TapNow share link to clone into the signed-in account and measure (masked)
+        required: false
+        default: ''
       bff_env:
         description: test BFF env (default pr-11238)
         required: false
@@ -101,7 +105,7 @@ jobs:
       # The repo is public: mask the preview share token and the canvas id before any step shows them. Read from the event
       # file, so the values never appear in a script line either.
       - name: Mask inputs
-        run: node -e "const i=require(process.env.GITHUB_EVENT_PATH).inputs||{};for(const k of ['vercel_share','canvas_id','video_key','cm_share'])if(i[k])console.log('::add-mask::'+i[k])"
+        run: node -e "const i=require(process.env.GITHUB_EVENT_PATH).inputs||{};for(const k of ['vercel_share','canvas_id','video_key','cm_share','share_url'])if(i[k])console.log('::add-mask::'+i[k])"
       - run: npm install --no-audit --no-fund
       # Playwright's CDN is slow from the Mac's network (11-27: a new Chromium stalled for 10+ min): try the npmmirror copy
       # first, each attempt capped at 6 min, then the default CDN. Headed runs only, so the headless shell is skipped.
@@ -130,6 +134,7 @@ jobs:
           BFF_ENV: ${{ inputs.bff_env }}
           BG_TEST: ${{ inputs.bg_test }}
           CM_SHARE: ${{ inputs.cm_share }}
+          SHARE_URL: ${{ inputs.share_url }}
           FULL_TRACE: ${{ inputs.full_trace }}
           OPENS: ${{ inputs.opens }}
           PLAY_SECONDS: ${{ inputs.play_seconds }}

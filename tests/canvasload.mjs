@@ -6,9 +6,10 @@
 //   - video bytes fetched while sampling.
 // Then, as a check of cause, the same sample with every CineMap iframe hidden (display:none: Chromium stops drawing them).
 // Only numbers and short labels are printed (public repo); screenshots stay on the Mac.
-import { FE, BFF, launch, dismiss, sleep, log, result, save, shot } from './lib.mjs';
+import { FE, BFF, OUT, launch, dismiss, sleep, log, result, save, shot } from './lib.mjs';
 
-const CANVAS = process.env.CANVAS_ID; if (!CANVAS) throw new Error('CANVAS_ID input is required');
+let CANVAS = process.env.CANVAS_ID; const SHARE_URL = process.env.SHARE_URL || '';
+if (!CANVAS && !SHARE_URL) throw new Error('CANVAS_ID or SHARE_URL input is required');
 const SECONDS = Math.max(6, Number(process.env.PLAY_SECONDS || 20));
 
 const { ctx, page } = await launch();
@@ -54,6 +55,22 @@ async function sample(name) {
 
 try {
   if (process.env.CM_SHARE) { await page.goto(`https://pr-11305.cinemap.space/?_vercel_share=${process.env.CM_SHARE}`, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {}); await sleep(3000); }
+  // Sway 11-28: a share link instead of a canvas id: clone it into the signed-in account (克隆项目 / Clone Project) and measure the copy.
+  if (SHARE_URL) {
+    await page.goto(SHARE_URL, { waitUntil: 'domcontentloaded', timeout: 120000 }).catch(() => {});
+    log('opened the share link — sign in in this window if asked; waiting up to 30 min for the Clone Project button');
+    const btn = page.getByRole('button', { name: /^(克隆项目|Clone Project)$/ });
+    const until = Date.now() + 30 * 60_000;
+    while (Date.now() < until && !(await btn.count().catch(() => 0))) await sleep(3000);
+    if (!(await btn.count().catch(() => 0))) throw new Error('no Clone Project button on the share page within 30 min');
+    await sleep(3000); await btn.first().click();
+    const got = await page.waitForURL(/\/(canvas|p)\/[0-9a-f-]{36}/, { timeout: 120000 }).then(() => true).catch(() => false);
+    const m = page.url().match(/\/(?:canvas|p)\/([0-9a-f-]{36})/);
+    if (!got || !m) throw new Error('clone did not open a new canvas');
+    CANVAS = m[1];
+    (await import('node:fs')).writeFileSync((await import('node:path')).join(OUT, 'cloned-canvas.txt'), CANVAS + '\n');
+    result.clonedCanvas = CANVAS.slice(0, 8); log('cloned into canvas', CANVAS.slice(0, 8));
+  }
   // Sway 11-28: no sign-in by script. The window opens on the canvas; whoever is at the Mac signs in to Vercel and TapNow there
   // (up to 30 min, coming back to the canvas once signed in). Measuring starts once the canvas shows its nodes.
   const url = `https://${FE}/p/${CANVAS}?t=c&bff_env=${BFF}`;
