@@ -13,6 +13,9 @@ if (!CANVAS && !SHARE_URL) throw new Error('CANVAS_ID or SHARE_URL input is requ
 const SECONDS = Math.max(6, Number(process.env.PLAY_SECONDS || 20));
 
 const { ctx, page } = await launch();
+// Every node stamped data.cinemap, as the canvas's overview answers carry them (latest answer wins).
+const cmNodes = { list: [] };
+page.on('response', async (r) => { if (!/\/canvases\/[^/]+\/overview/.test(r.url())) return; try { const d = await r.json(); const out = []; const walk = (o) => { if (Array.isArray(o)) o.forEach(walk); else if (o && typeof o === 'object') { if (o.data?.cinemap && (o.id || o.node_id)) out.push(o); Object.values(o).forEach(walk); } }; walk(d); if (out.length) cmNodes.list = out; } catch {} });
 const kindOf = (u) => { try { const x = new URL(u); if (!/cinemap/.test(x.host)) return null; return x.searchParams.get('render') === 'clips' ? 'clipRender' : x.searchParams.get('embed') === 'node' ? 'nodeViewer' : 'other'; } catch { return null; } };
 const cmFrames = () => page.frames().filter((f) => f !== page.mainFrame() && kindOf(f.url()));
 
@@ -95,6 +98,19 @@ try {
   if (!ready) throw new Error('canvas never showed its nodes (not signed in within 30 min, or no access to this canvas)');
   log('canvas loaded, settling 25 s');
   await sleep(25000); await dismiss(page);
+  if (process.env.MODE === 'clipinfo') {
+    // Sway 11-28: what the shot cards say about their clips (state, code, the runner's reason), the groups per job. Ids cut to 8, no names,
+    // URLs taken out of the reasons.
+    const cut = (v) => (typeof v === 'string' ? v.slice(0, 8) : v ?? null);
+    const clean = (v) => (typeof v === 'string' ? v.replace(/https?:\/\/\S+/g, '<url>').slice(0, 200) : v ?? null);
+    result.cinemapNodes = cmNodes.list.map((n) => { const c = n.data.cinemap; const clip = c.clip || null;
+      return { node: cut(n.id || n.node_id), type: n.type, role: c.role ?? (n.type === 'cinemap-world' ? 'world' : null), status: c.status ?? null, pending: c.pending ?? null, job: cut(c.job_id), shot: cut(c.shot_id), render: cut(c.render_id), scene: cut(c.scene_id), parent: cut(n.parent_id || n.parentId),
+        hasSrc: !!n.data.src, clip: clip ? { state: clip.state, code: clip.code ?? null, reason: clean(clip.reason), pct: clip.pct ?? null, at: clip.at ?? null, attempts: clip.attempts ?? null } : null,
+        error: clean(c.error ?? c.error_code ?? null) }; });
+    log('cinemap nodes', JSON.stringify(result.cinemapNodes));
+    await shot(page, 'clipinfo');
+    throw Object.assign(new Error('clipinfo done'), { done: true });
+  }
   result.env = await page.evaluate(() => ({ dpr: devicePixelRatio, cores: navigator.hardwareConcurrency, w: innerWidth, h: innerHeight })).catch(() => null);
   result.asLoaded = await sample('1-as-loaded');
   if (process.env.MODE === 'reshoot') {
@@ -138,5 +154,5 @@ try {
   await sleep(2000);
   result.cinemapHidden = await sample('3-cinemap-hidden');
   await page.evaluate(() => { for (const f of document.querySelectorAll('iframe[data-cl-hid]')) { f.style.display = f.dataset.clHid; delete f.dataset.clHid; } }).catch(() => {});
-} catch (e) { result.error = String(e?.message || e); log('ERROR', result.error); await shot(page, 'error'); }
+} catch (e) { if (e?.done) { log('done'); } else { result.error = String(e?.message || e); log('ERROR', result.error); await shot(page, 'error'); } }
 finally { save(); await ctx.close(); }
