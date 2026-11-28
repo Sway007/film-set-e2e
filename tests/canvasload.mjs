@@ -6,7 +6,7 @@
 //   - video bytes fetched while sampling.
 // Then, as a check of cause, the same sample with every CineMap iframe hidden (display:none: Chromium stops drawing them).
 // Only numbers and short labels are printed (public repo); screenshots stay on the Mac.
-import { FE, BFF, launch, signIn, dismiss, sleep, log, result, save, shot } from './lib.mjs';
+import { FE, BFF, launch, dismiss, sleep, log, result, save, shot } from './lib.mjs';
 
 const CANVAS = process.env.CANVAS_ID; if (!CANVAS) throw new Error('CANVAS_ID input is required');
 const SECONDS = Math.max(6, Number(process.env.PLAY_SECONDS || 20));
@@ -54,8 +54,22 @@ async function sample(name) {
 
 try {
   if (process.env.CM_SHARE) { await page.goto(`https://pr-11305.cinemap.space/?_vercel_share=${process.env.CM_SHARE}`, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {}); await sleep(3000); }
-  await signIn(page);
-  await page.goto(`https://${FE}/p/${CANVAS}?t=c&bff_env=${BFF}`, { waitUntil: 'domcontentloaded', timeout: 120000 });
+  // Sway 11-28: no sign-in by script. The window opens on the canvas; whoever is at the Mac signs in to Vercel and TapNow there
+  // (up to 30 min, coming back to the canvas once signed in). Measuring starts once the canvas shows its nodes.
+  const url = `https://${FE}/p/${CANVAS}?t=c&bff_env=${BFF}`;
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 120000 }).catch(() => {});
+  log('opened the canvas — sign in to Vercel and TapNow in this window if asked; the test waits up to 30 min');
+  const deadline = Date.now() + 30 * 60_000; let ready = false, lastNudge = 0;
+  while (Date.now() < deadline) {
+    const onCanvas = (() => { try { const u = new URL(page.url()); return u.host === FE && u.pathname.includes(`/p/${CANVAS}`); } catch { return false; } })();
+    const nodes = onCanvas ? await page.locator('.react-flow__node').count().catch(() => 0) : 0;
+    if (nodes > 0) { ready = true; break; }
+    // signed in somewhere else on TapNow (home page): go back to the canvas, at most every 20 s
+    try { const u = new URL(page.url()); if (u.host === FE && !onCanvas && !/login|auth/.test(u.pathname) && Date.now() - lastNudge > 20000) { lastNudge = Date.now(); await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 120000 }).catch(() => {}); } } catch {}
+    await sleep(3000);
+  }
+  if (!ready) throw new Error('canvas never showed its nodes (not signed in within 30 min, or no access to this canvas)');
+  log('canvas loaded, settling 25 s');
   await sleep(25000); await dismiss(page);
   result.env = await page.evaluate(() => ({ dpr: devicePixelRatio, cores: navigator.hardwareConcurrency, w: innerWidth, h: innerHeight })).catch(() => null);
   result.asLoaded = await sample('1-as-loaded');
