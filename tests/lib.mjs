@@ -44,15 +44,15 @@ export async function signIn(page) {
   // The share link and the app both redirect: wait until the page settles before looking at it.
   await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
   await sleep(5000);
-  const needsLogin = async () => { try { return /auth-login|\/login/.test(page.url()) || (await page.locator('text=Try Free').count()) > 0; } catch { await sleep(2000); return /auth-login|\/login/.test(page.url()); } };
+  const needsLogin = async () => { try { return /auth-login|\/login/.test(page.url()) || (await page.locator('text=/^(Try Free|免费试用)$/').count()) > 0; } catch { await sleep(2000); return /auth-login|\/login/.test(page.url()); } };
   if (!(await needsLogin())) { log('already signed in'); return; }
   if (!process.env.T_USER || !process.env.T_PASS) throw new Error('Not signed in and no TAPNOW_USER / TAPNOW_PASS secrets');
   await page.keyboard.press('Escape');
-  const tryFree = page.locator('text=Try Free');
+  const tryFree = page.locator('text=/^(Try Free|免费试用)$/');
   if (await tryFree.count().catch(() => 0)) { await tryFree.last().click(); await sleep(4000); }
-  const got = page.getByRole('button', { name: /^Got it$/ }); if (await got.count().catch(() => 0)) await got.first().click({ force: true, timeout: 5000 }).catch(() => {});
-  await page.getByPlaceholder(/Email address/i).fill(process.env.T_USER, { timeout: 60000 });
-  await page.getByRole('button', { name: /^Continue$/ }).click();
+  const got = page.getByRole('button', { name: /^(Got it|知道了)$/ }); if (await got.count().catch(() => 0)) await got.first().click({ force: true, timeout: 5000 }).catch(() => {});
+  await page.getByPlaceholder(/Email address|邮箱/i).fill(process.env.T_USER, { timeout: 60000 });
+  { const go = page.getByRole('button', { name: /^(Continue|继续|下一步|Next)$/ }); if (await go.count().catch(() => 0)) await go.first().click(); else await page.keyboard.press('Enter'); } // Chrome on the Mac may show the page in Chinese
   await page.locator('input[type=password]').first().waitFor({ timeout: 60000 });
   await page.locator('input[type=password]').first().fill(process.env.T_PASS);
   await page.keyboard.press('Enter'); await sleep(10000);
