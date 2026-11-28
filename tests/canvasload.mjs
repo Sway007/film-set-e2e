@@ -56,7 +56,13 @@ async function sample(name) {
 try {
   if (process.env.CM_SHARE) { await page.goto(`https://pr-11305.cinemap.space/?_vercel_share=${process.env.CM_SHARE}`, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {}); await sleep(3000); }
   // Sway 11-28: a share link instead of a canvas id: clone it into the signed-in account (克隆项目 / Clone Project) and measure the copy.
-  if (SHARE_URL) {
+  // RESHOOT reuses the newest clone this Mac made (cloned-canvas.txt of an earlier run) instead of cloning again.
+  if (SHARE_URL && process.env.MODE === 'reshoot' && !CANVAS) {
+    const fs = await import('node:fs'), path = await import('node:path'); const root = path.dirname(OUT);
+    const found = fs.readdirSync(root).map((d) => path.join(root, d, 'cloned-canvas.txt')).filter((f) => fs.existsSync(f)).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
+    if (found) { CANVAS = fs.readFileSync(found, 'utf8').trim().split(/\s+/)[0]; result.reusedClone = CANVAS.slice(0, 8); log('reusing clone', CANVAS.slice(0, 8)); }
+  }
+  if (SHARE_URL && !CANVAS) {
     await page.goto(SHARE_URL, { waitUntil: 'domcontentloaded', timeout: 120000 }).catch(() => {});
     log('opened the share link — sign in in this window if asked; waiting up to 30 min for the Clone Project button');
     const btn = page.getByRole('button', { name: /^(克隆项目|Clone Project)$/ });
@@ -73,7 +79,8 @@ try {
   }
   // Sway 11-28: no sign-in by script. The window opens on the canvas; whoever is at the Mac signs in to Vercel and TapNow there
   // (up to 30 min, coming back to the canvas once signed in). Measuring starts once the canvas shows its nodes.
-  const url = `https://${FE}/p/${CANVAS}?t=c&bff_env=${BFF}`;
+  const AGENT_ENV = process.env.AGENT_ENV || ''; if (AGENT_ENV && !/^[a-z0-9-]+$/.test(AGENT_ENV)) throw new Error('bad agent_env');
+  const url = `https://${FE}/p/${CANVAS}?t=c&bff_env=${BFF}${AGENT_ENV ? `&agent_team=project&agent_env=${AGENT_ENV}` : ''}`;
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 120000 }).catch(() => {});
   log('opened the canvas — sign in to Vercel and TapNow in this window if asked; the test waits up to 30 min');
   const deadline = Date.now() + 30 * 60_000; let ready = false, lastNudge = 0;
@@ -90,6 +97,26 @@ try {
   await sleep(25000); await dismiss(page);
   result.env = await page.evaluate(() => ({ dpr: devicePixelRatio, cores: navigator.hardwareConcurrency, w: innerWidth, h: innerHeight })).catch(() => null);
   result.asLoaded = await sample('1-as-loaded');
+  if (process.env.MODE === 'reshoot') {
+    // Sway 11-28: measure while a clip renders. Ask the canvas agent (SENTENCE) to reshoot one shot, then sample back to back
+    // (SECONDS each) until the clip render frame has come and gone (+1 sample), or 15 min.
+    if (await page.getByText('Front desk', { exact: true }).nth(1).isVisible().catch(() => false)) { await page.mouse.click(631, 40); await sleep(1500); }
+    await page.mouse.click(700, 450); await page.keyboard.press('/'); await sleep(1500);
+    await page.keyboard.type(process.env.SENTENCE, { delay: 20 }); await sleep(500); await page.keyboard.press('Enter');
+    const tSent = Date.now(); log('sent the reshoot sentence');
+    result.timeline = []; let seen = false, goneAfter = 0;
+    while (Date.now() - tSent < 15 * 60_000) {
+      const o = await sample(`r-${Math.round((Date.now() - tSent) / 1000)}s`);
+      const kinds = o.after?.byKind || {}; const render = (kinds.clipRender?.n || 0) > 0;
+      const cr = o.cinemapFrames.find((f) => f.kind === 'clipRender');
+      result.timeline.push({ t: Math.round((Date.now() - tSent) / 1000), render, iframes: Object.fromEntries(Object.entries(kinds).map(([k, v]) => [k, v.n])),
+        fps: o.page?.fps, p95: o.page?.p95, over50: o.page?.over50, longMs: o.page?.longMs, longMax: o.page?.longMax, heapMB: o.page?.heapMB,
+        renderFps: cr?.fps ?? null, renderLongMs: cr?.longMs ?? null });
+      if (render) seen = true; else if (seen && ++goneAfter >= 2) break;
+    }
+    result.renderSeen = seen;
+    await shot(page, 'r-end');
+  }
   await page.mouse.move(result.env?.w ? result.env.w * 0.7 : 900, 400); await page.keyboard.press('f').catch(() => {}); await sleep(4000);
   result.fit = await sample('2-fit');
   // Cause check: hide every CineMap iframe and sample again.
