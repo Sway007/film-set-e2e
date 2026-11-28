@@ -25,7 +25,7 @@ export async function launch(browserName = process.env.BROWSER || 'chromium', { 
   // the Chromium profile's cookies: the Vercel sign-in of the CineMap preview and the TapNow session live there
   const dir = path.join(os.homedir(), '.film-set-e2e', channel ? `profile-${channel}` : `profile-${browserName}`);
   let seed = [];
-  if (channel) { try { const c0 = await chromium.launchPersistentContext(path.join(os.homedir(), '.film-set-e2e', 'profile-chromium'), { headless: true }); seed = await c0.cookies(); await c0.close(); } catch (e) { console.log('cookie seed failed', String(e?.message || e).slice(0, 200)); } }
+  if (channel) { try { const c0 = await chromium.launchPersistentContext(path.join(os.homedir(), '.film-set-e2e', 'profile-chromium'), { headless: true, channel: 'chromium' }); /* the full build's headless mode: only it is installed (--no-shell) */ seed = await c0.cookies(); await c0.close(); } catch (e) { console.log('cookie seed failed', String(e?.message || e).slice(0, 200)); } }
   const headless = process.env.HEADLESS === '1';
   const opts = { viewport: { width: 1600, height: 1000 }, headless, recordVideo: { dir: OUT, size: { width: 1600, height: 1000 } } };
   const ctx = browserName === 'webkit'
